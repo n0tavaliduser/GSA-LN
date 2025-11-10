@@ -3,7 +3,7 @@ num_gpu: auto
 
 # Dataset paths
 data:
-  train_hr: "data/DIV2K_train_HR"
+  train_hr: "data/DIV2K_train_HR" 
   train_lr: "data/DIV2K_train_LR_bicubic/X4"
   valid_hr: "data/DIV2K_valid_HR"
   valid_lr: "data/DIV2K_valid_LR_bicubic/X4"
@@ -19,7 +19,13 @@ model:
 
 # Training parameters
 training:
-  epochs: 100
+  epochs: 1
   batch_size: 16
   lr: 0.0001
   lr_patch_size: 48
+
+# Testing parameters
+test:
+  pretrained_model: "pretrained/trifa_x4.pth"
+  input_dir: "data/single"
+  output_dir: "results/trifa_x4/visualizations"
