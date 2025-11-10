@@ -6,6 +6,7 @@ from skimage.metrics import peak_signal_noise_ratio as psnr
 from skimage.metrics import structural_similarity as ssim
 from src.backbones.edsr import EDSR
 from src.utils.datasets import SuperResolutionDataset
+from src.utils.device import get_device
 
 def main():
     # Load configuration
@@ -13,8 +14,7 @@ def main():
         config = yaml.safe_load(f)
 
     # Setup device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+    device = get_device(config)
 
     # Initialize model from config
     model_config = config['model']

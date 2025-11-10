@@ -4,6 +4,7 @@ import os
 from PIL import Image
 from torchvision import transforms
 from src.backbones.edsr import EDSR
+from src.utils.device import get_device
 
 def main():
     # Load configuration
@@ -11,8 +12,7 @@ def main():
         config = yaml.safe_load(f)
 
     # Setup device
-    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    print(f"Using device: {device}")
+    device = get_device(config)
 
     # Initialize model from config
     model_config = config['model']
