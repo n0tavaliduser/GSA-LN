@@ -56,6 +56,7 @@ def main():
         hr_dir=config['data']['train_hr'],
         lr_dir=config['data']['train_lr'],
         scale=config['model']['scale'],
+        mode='train',
         lr_patch_size=config['training']['lr_patch_size']
     )
     dataloader = DataLoader(train_dataset, batch_size=config['training']['batch_size'], shuffle=True)
