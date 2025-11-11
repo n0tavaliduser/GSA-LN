@@ -66,26 +66,20 @@ def main():
     total_ssim = 0
 
     with torch.no_grad():
-        for i, (lr_image, hr_image) in enumerate(val_dataloader):
-            lr_image, hr_image = lr_image.to(device), hr_image.to(device)
+        for i, (lr_tensor, hr_tensor) in enumerate(val_dataloader):
+            lr_tensor, hr_tensor = lr_tensor.to(device), hr_tensor.to(device)
+            sr_tensor = model(lr_tensor)
 
-            sr_image = model(lr_image)
-            sr_image = torch.clamp(sr_image, 0, 1)
+            # Crop images to the same size
+            h, w = sr_tensor.shape[-2], sr_tensor.shape[-1]
+            hr_tensor_cropped = hr_tensor[..., :h, :w]
 
-            # Crop images to the minimum dimensions to handle size mismatches
-            _, _, h_hr, w_hr = hr_image.shape
-            _, _, h_sr, w_sr = sr_image.shape
-            h, w = min(h_hr, h_sr), min(w_hr, w_sr)
-            hr_image, sr_image = hr_image[:, :, :h, :w], sr_image[:, :, :h, :w]
+            # Convert tensors to numpy arrays in range [0, 255]
+            sr_img = sr_tensor.squeeze(0).mul(255).clamp(0, 255).byte().cpu().numpy().transpose(1, 2, 0)
+            hr_img = hr_tensor_cropped.squeeze(0).mul(255).clamp(0, 255).byte().cpu().numpy().transpose(1, 2, 0)
 
-            sr_image_np = sr_image.squeeze(0).cpu().numpy().transpose(1, 2, 0)
-            hr_image_np = hr_image.squeeze(0).cpu().numpy().transpose(1, 2, 0)
-
-            current_psnr = psnr(hr_image_np, sr_image_np, data_range=1.0)
-            try:
-                current_ssim = ssim(hr_image_np, sr_image_np, data_range=1.0, channel_axis=-1, multichannel=True)
-            except TypeError:
-                current_ssim = ssim(hr_image_np, sr_image_np, data_range=1.0, multichannel=True)
+            current_psnr = psnr(hr_img, sr_img, data_range=255)
+            current_ssim = ssim(hr_img, sr_img, data_range=255, channel_axis=2, win_size=7)
 
             total_psnr += current_psnr
             total_ssim += current_ssim
