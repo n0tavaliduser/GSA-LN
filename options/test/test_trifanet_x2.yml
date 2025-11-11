@@ -14,6 +14,26 @@ datasets:
     io_backend:
       type: disk
 
+  test_2:
+    task: SR
+    name: Set14
+    type: PairedImageDataset
+    dataroot_gt: datasets/benchmark/Set14/HR
+    dataroot_lq: datasets/benchmark/Set14/LR_bicubic/X2
+    filename_tmpl: '{}x2'
+    io_backend:
+      type: disk
+
+  test_3:
+    task: SR
+    name: B100
+    type: PairedImageDataset
+    dataroot_gt: datasets/benchmark/B100/HR
+    dataroot_lq: datasets/benchmark/B100/LR_bicubic/X2
+    filename_tmpl: '{}x2'
+    io_backend:
+      type: disk
+
 network_g:
   type: TriFANet
   num_in_ch: 3
@@ -23,7 +43,7 @@ network_g:
   upscale: 2
 
 path:
-  pretrain_network_g: experiments/pretrained_models/models/net_g_20000.pth
+  pretrain_network_g: experiments/pretrained_models/models/net_g_110000.pth
   strict_load: true
   resume_state: ~
 
