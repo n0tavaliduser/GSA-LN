@@ -6,3 +6,5 @@ matplotlib
 scikit-image
 PyYAML
 Pillow==9.5.0
+tqdm
+wandb
