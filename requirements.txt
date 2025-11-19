@@ -8,3 +8,4 @@ PyYAML
 Pillow==9.5.0
 tqdm
 wandb
+tensorboard
