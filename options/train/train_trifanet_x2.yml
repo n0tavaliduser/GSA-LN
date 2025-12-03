@@ -20,7 +20,7 @@ datasets:
 
     # data loader
     use_shuffle: True
-    num_worker_per_gpu: 12
+    num_worker_per_gpu: 4
     batch_size_per_gpu: 8
     dataset_enlarge_ratio: 1
     prefetch_mode: ~
@@ -40,9 +40,9 @@ network_g:
   num_feat: 64
 
 path:
-  pretrain_network_g: ~
+  pretrain_network_g: experiments/TriFANet_DF2K_x2/models/net_g_445000.pth
   strict_load_g: True
-  resume_state: ~
+  resume_state: experiments/TriFANet_DF2K_x2/training_state/445000.state
 
 train:
   optim_g:

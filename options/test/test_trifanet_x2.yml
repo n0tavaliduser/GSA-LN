@@ -43,7 +43,7 @@ network_g:
   upscale: 2
 
 path:
-  pretrain_network_g: experiments/pretrained_models/models/net_g_110000.pth
+  pretrain_network_g: experiments/TriFANet_DF2K_x2/models/net_g_425000.pth
   strict_load: true
   resume_state: ~
 
