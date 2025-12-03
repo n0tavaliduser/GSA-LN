@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from basicsr.utils.registry import ARCH_REGISTRY
+from basicsr.archs.arch_util import DCNv2Pack
 
 class ResidualBlock(nn.Module):
     """EDSR-style residual block tanpa batchnorm"""
@@ -18,37 +19,38 @@ class ResidualBlock(nn.Module):
         return x + res * 0.1  # residual scaling
 
 class ChannelAttention(nn.Module):
-    """Channel Attention sederhana (SE-Block style)"""
     def __init__(self, num_feat=64, reduction=16):
         super().__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        hidden = max(1, num_feat // reduction)
         self.fc = nn.Sequential(
-            nn.Linear(num_feat, num_feat // reduction, bias=False),
+            nn.Linear(num_feat, hidden, bias=False),
             nn.ReLU(inplace=True),
-            nn.Linear(num_feat // reduction, num_feat, bias=False),
+            nn.Linear(hidden, num_feat, bias=False),
             nn.Sigmoid()
         )
 
     def forward(self, x):
         b, c, _, _ = x.size()
-        y = self.avg_pool(x).view(b, c)
-        y = self.fc(y).view(b, c, 1, 1)
+        fft_mag = torch.abs(torch.fft.rfft2(x, norm='ortho'))
+        desc = torch.log1p(fft_mag).mean(dim=(-2, -1))
+        y = self.fc(desc).view(b, c, 1, 1)
         return x * y
 
 
 class SpatialAttention(nn.Module):
-    """Spatial Attention sederhana (CBAM style)"""
-    def __init__(self, kernel_size=7):
+    def __init__(self, kernel_size=7, deformable_groups=1):
         super().__init__()
-        self.conv = nn.Conv2d(2, 1, kernel_size, padding=(kernel_size - 1) // 2)
+        padding = (kernel_size - 1) // 2
+        self.dcn = DCNv2Pack(2, 1, kernel_size, stride=1, padding=padding, deformable_groups=deformable_groups)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
         avg_out = torch.mean(x, dim=1, keepdim=True)
         max_out, _ = torch.max(x, dim=1, keepdim=True)
         x_cat = torch.cat([avg_out, max_out], dim=1)
-        attention = self.sigmoid(self.conv(x_cat))
-        return x * attention
+        att = self.dcn(x_cat, x_cat)
+        att = self.sigmoid(att)
+        return x * att
 
 
 class FrequencyAttention(nn.Module):
