@@ -51,6 +51,7 @@ class ChannelAttention(nn.Module):
     def __init__(self, num_feat=64, reduction=16):
         super().__init__()
         hidden = max(1, num_feat // reduction)
+        self.ln = nn.LayerNorm(num_feat)
         self.fc = nn.Sequential(
             nn.Linear(num_feat, hidden, bias=False),
             nn.ReLU(inplace=True),
@@ -70,25 +71,18 @@ class ChannelAttention(nn.Module):
         b, c, _, _ = x.size()
         fft_mag = torch.abs(torch.fft.rfft2(x, norm='ortho'))
         desc = torch.log1p(fft_mag).mean(dim=(-2, -1))
+        desc = self.ln(desc)
         y = self.fc(desc).view(b, c, 1, 1)
         return x * y
 
 
 class SpatialAttention(nn.Module):
-    """Deformed Spatial Attention (DSA).
-
-    Uses DCNv2Pack(2→1) on concatenated average and max maps to generate a
-    spatial attention mask with deformable sampling, improving alignment to
-    local structures.
-
-    Args:
-        kernel_size (int): Kernel size for DCN.
-        deformable_groups (int): Number of deformable groups.
-    """
-    def __init__(self, kernel_size=7, deformable_groups=1):
+    def __init__(self, num_feat=64, kernel_size=7, deformable_groups=1):
         super().__init__()
         padding = (kernel_size - 1) // 2
-        self.dcn = DCNv2Pack(2, 1, kernel_size, stride=1, padding=padding, deformable_groups=deformable_groups)
+        self.proj = nn.Conv2d(num_feat, num_feat, 1, 1, 0)
+        self.offset_proj = nn.Conv2d(2, num_feat, 1, 1, 0)
+        self.dcn = DCNv2Pack(num_feat, 1, kernel_size, stride=1, padding=padding, deformable_groups=deformable_groups)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
@@ -103,7 +97,7 @@ class SpatialAttention(nn.Module):
         avg_out = torch.mean(x, dim=1, keepdim=True)
         max_out, _ = torch.max(x, dim=1, keepdim=True)
         x_cat = torch.cat([avg_out, max_out], dim=1)
-        att = self.dcn(x_cat, x_cat)
+        att = self.dcn(self.proj(x), self.offset_proj(x_cat))
         att = self.sigmoid(att)
         return x * att
 
@@ -111,8 +105,8 @@ class SpatialAttention(nn.Module):
 class FrequencyAttention(nn.Module):
     """Frequency magnitude modulation.
 
-    Normalizes rFFT2 magnitude across spatial dims, resizes to original size
-    and applies a learnable scale to modulate features.
+    Applies per-frequency magnitude weighting in rFFT2 domain and reconstructs
+    a spatial modulation map via irFFT2, then scales features.
     """
     def __init__(self):
         super().__init__()
@@ -127,17 +121,23 @@ class FrequencyAttention(nn.Module):
         Returns:
             Tensor: Modulated feature map (B, C, H, W).
         """
-        fft_mag = torch.abs(torch.fft.rfft2(x, norm='ortho'))
-        fft_mag = fft_mag / (torch.mean(fft_mag, dim=(-2, -1), keepdim=True) + 1e-6)
-        fft_mag = F.interpolate(fft_mag, size=x.shape[-2:], mode='bilinear', align_corners=False)
-        return x * (1 + self.scale * fft_mag)
+        spec = torch.fft.rfft2(x, norm='ortho')
+        mag = torch.abs(spec)
+        w = mag / (torch.mean(mag, dim=(-2, -1), keepdim=True) + 1e-6)
+        spec_w = spec * w
+        m = torch.fft.irfft2(spec_w, s=x.shape[-2:], norm='ortho')
+        m = F.layer_norm(m, m.shape[-2:])
+        m = torch.clamp(m, -1.0, 1.0)
+        return x * (1 + self.scale * m)
 
 class FrequencyAttentionMB(nn.Module):
     """Multi-band frequency attention with low/mid/high bands."""
-    def __init__(self, num_feat, low_thr=0.33, mid_thr=0.66):
+    def __init__(self, num_feat, low_thr=0.33, mid_thr=0.66, mask_order='natural', shift_mag=False):
         super().__init__()
         self.low_thr = low_thr
         self.mid_thr = mid_thr
+        self.mask_order = mask_order
+        self.shift_mag = shift_mag
         self.scale = nn.Parameter(torch.ones(1))
         self.mlp = nn.Sequential(
             nn.Linear(3, 3, bias=False),
@@ -145,6 +145,7 @@ class FrequencyAttentionMB(nn.Module):
             nn.Linear(3, 3, bias=False),
             nn.Sigmoid()
         )
+        self.ln3 = nn.LayerNorm(3)
         self.register_buffer('r_norm', torch.tensor([]), persistent=False)
         self.register_buffer('low_mask', torch.tensor([]), persistent=False)
         self.register_buffer('mid_mask', torch.tensor([]), persistent=False)
@@ -152,11 +153,16 @@ class FrequencyAttentionMB(nn.Module):
 
     def _ensure_masks(self, h, w, device, dtype):
         if self.r_norm.numel() == 0 or self.r_norm.shape != (h, w):
-            yy = torch.arange(h, device=device, dtype=dtype).view(h, 1)
-            xx = torch.arange(w, device=device, dtype=dtype).view(1, w)
-            cy = (h - 1) / 2.0
-            cx = (w - 1) / 2.0
-            r = torch.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
+            if self.mask_order == 'natural':
+                fy = torch.fft.fftfreq(h, d=1.0).to(device=device, dtype=dtype).view(h, 1)
+                fx = torch.fft.fftfreq(w, d=1.0).to(device=device, dtype=dtype).view(1, w)
+                r = torch.sqrt(fy ** 2 + fx ** 2)
+            else:
+                yy = torch.arange(h, device=device, dtype=dtype).view(h, 1)
+                xx = torch.arange(w, device=device, dtype=dtype).view(1, w)
+                cy = (h - 1) / 2.0
+                cx = (w - 1) / 2.0
+                r = torch.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
             r = r / (r.max() + 1e-6)
             low = (r <= self.low_thr).to(dtype).view(1, 1, h, w)
             mid = ((r > self.low_thr) & (r <= self.mid_thr)).to(dtype).view(1, 1, h, w)
@@ -169,13 +175,15 @@ class FrequencyAttentionMB(nn.Module):
     def forward(self, x):
         b, c, h, w = x.shape
         mag = torch.abs(torch.fft.fft2(x, norm='ortho'))
-        mag = torch.roll(mag, shifts=(h // 2, w // 2), dims=(-2, -1))
+        if self.mask_order != 'natural' and self.shift_mag:
+            mag = torch.fft.fftshift(mag, dim=(-2, -1))
         self._ensure_masks(h, w, x.device, mag.dtype)
         low_mean = (mag * self.low_mask).mean(dim=(-2, -1))
         mid_mean = (mag * self.mid_mask).mean(dim=(-2, -1))
         high_mean = (mag * self.high_mask).mean(dim=(-2, -1))
         desc = torch.stack([low_mean, mid_mean, high_mean], dim=-1)
         desc = torch.log1p(desc)
+        desc = self.ln3(desc)
         g = self.mlp(desc.view(-1, 3)).view(b, c, 3)
         wsum = (g * desc).sum(dim=-1)
         y = wsum.view(b, c, 1, 1)
@@ -196,7 +204,7 @@ class TriFANet(nn.Module):
         num_blocks (int): Number of residual blocks in backbone.
         upscale (int): Upscaling factor for PixelShuffle.
     """
-    def __init__(self, num_in_ch=3, num_out_ch=3, num_feat=64, num_blocks=16, upscale=2, freq_mb=True, low_thr=0.33, mid_thr=0.66):
+    def __init__(self, num_in_ch=3, num_out_ch=3, num_feat=64, num_blocks=16, upscale=2, freq_mb=True, low_thr=0.33, mid_thr=0.66, mask_order='natural', shift_mag=False):
         super().__init__()
 
         self.conv_in = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
@@ -204,8 +212,8 @@ class TriFANet(nn.Module):
         self.conv_mid = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
 
         self.ca = ChannelAttention(num_feat)
-        self.sa = SpatialAttention()
-        self.fa = FrequencyAttentionMB(num_feat, low_thr=low_thr, mid_thr=mid_thr) if freq_mb else FrequencyAttention()
+        self.sa = SpatialAttention(num_feat)
+        self.fa = FrequencyAttentionMB(num_feat, low_thr=low_thr, mid_thr=mid_thr, mask_order=mask_order, shift_mag=shift_mag) if freq_mb else FrequencyAttention()
 
         self.upsampler = nn.Sequential(
             nn.Conv2d(num_feat, num_feat * (upscale ** 2), 3, 1, 1),
