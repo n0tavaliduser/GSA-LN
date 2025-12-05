@@ -132,6 +132,55 @@ class FrequencyAttention(nn.Module):
         fft_mag = F.interpolate(fft_mag, size=x.shape[-2:], mode='bilinear', align_corners=False)
         return x * (1 + self.scale * fft_mag)
 
+class FrequencyAttentionMB(nn.Module):
+    """Multi-band frequency attention with low/mid/high bands."""
+    def __init__(self, num_feat, low_thr=0.33, mid_thr=0.66):
+        super().__init__()
+        self.low_thr = low_thr
+        self.mid_thr = mid_thr
+        self.scale = nn.Parameter(torch.ones(1))
+        self.mlp = nn.Sequential(
+            nn.Linear(3, 3, bias=False),
+            nn.ReLU(inplace=True),
+            nn.Linear(3, 3, bias=False),
+            nn.Sigmoid()
+        )
+        self.register_buffer('r_norm', torch.tensor([]), persistent=False)
+        self.register_buffer('low_mask', torch.tensor([]), persistent=False)
+        self.register_buffer('mid_mask', torch.tensor([]), persistent=False)
+        self.register_buffer('high_mask', torch.tensor([]), persistent=False)
+
+    def _ensure_masks(self, h, w, device, dtype):
+        if self.r_norm.numel() == 0 or self.r_norm.shape != (h, w):
+            yy = torch.arange(h, device=device, dtype=dtype).view(h, 1)
+            xx = torch.arange(w, device=device, dtype=dtype).view(1, w)
+            cy = (h - 1) / 2.0
+            cx = (w - 1) / 2.0
+            r = torch.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
+            r = r / (r.max() + 1e-6)
+            low = (r <= self.low_thr).to(dtype).view(1, 1, h, w)
+            mid = ((r > self.low_thr) & (r <= self.mid_thr)).to(dtype).view(1, 1, h, w)
+            high = (r > self.mid_thr).to(dtype).view(1, 1, h, w)
+            self.r_norm = r
+            self.low_mask = low
+            self.mid_mask = mid
+            self.high_mask = high
+
+    def forward(self, x):
+        b, c, h, w = x.shape
+        mag = torch.abs(torch.fft.fft2(x, norm='ortho'))
+        mag = torch.roll(mag, shifts=(h // 2, w // 2), dims=(-2, -1))
+        self._ensure_masks(h, w, x.device, mag.dtype)
+        low_mean = (mag * self.low_mask).mean(dim=(-2, -1))
+        mid_mean = (mag * self.mid_mask).mean(dim=(-2, -1))
+        high_mean = (mag * self.high_mask).mean(dim=(-2, -1))
+        desc = torch.stack([low_mean, mid_mean, high_mean], dim=-1)
+        desc = torch.log1p(desc)
+        g = self.mlp(desc.view(-1, 3)).view(b, c, 3)
+        wsum = (g * desc).sum(dim=-1)
+        y = wsum.view(b, c, 1, 1)
+        return x * (1 + self.scale * y)
+
 
 @ARCH_REGISTRY.register()
 class TriFANet(nn.Module):
@@ -147,7 +196,7 @@ class TriFANet(nn.Module):
         num_blocks (int): Number of residual blocks in backbone.
         upscale (int): Upscaling factor for PixelShuffle.
     """
-    def __init__(self, num_in_ch=3, num_out_ch=3, num_feat=64, num_blocks=16, upscale=2):
+    def __init__(self, num_in_ch=3, num_out_ch=3, num_feat=64, num_blocks=16, upscale=2, freq_mb=True, low_thr=0.33, mid_thr=0.66):
         super().__init__()
 
         self.conv_in = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
@@ -156,7 +205,7 @@ class TriFANet(nn.Module):
 
         self.ca = ChannelAttention(num_feat)
         self.sa = SpatialAttention()
-        self.fa = FrequencyAttention()
+        self.fa = FrequencyAttentionMB(num_feat, low_thr=low_thr, mid_thr=mid_thr) if freq_mb else FrequencyAttention()
 
         self.upsampler = nn.Sequential(
             nn.Conv2d(num_feat, num_feat * (upscale ** 2), 3, 1, 1),
