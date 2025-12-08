@@ -49,9 +49,9 @@ network_g:
   shift_mag: False
 
 path:
-  pretrain_network_g: ~
+  pretrain_network_g: experiments/TriFANet_DF2K_x2/models/net_g_200000.pth
   strict_load_g: True
-  resume_state: ~
+  resume_state: experiments/TriFANet_DF2K_x2/training_state/200000.state
 
 train:
   optim_g:
