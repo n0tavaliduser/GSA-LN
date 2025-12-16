@@ -1,6 +1,6 @@
-TriFA-Net
+GSA-LN
 
-Experimental implementation of the TriFA-Net architecture, exploring hybrid spatial-channel-frequency attention mechanisms for next-generation super-resolution
+Experimental implementation of the GSA-LN architecture, exploring hybrid spatial-channel-frequency attention mechanisms for next-generation super-resolution
 
 ## Pre-trained Models
 

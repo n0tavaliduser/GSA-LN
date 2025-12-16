@@ -191,7 +191,7 @@ class FrequencyAttentionMB(nn.Module):
 
 
 @ARCH_REGISTRY.register()
-class TriFANet(nn.Module):
+class GSALN(nn.Module):
     """Triple-Attention Super-Resolution network.
 
     Pipeline: head conv → residual backbone → mid conv + skip →
@@ -241,12 +241,12 @@ class TriFANet(nn.Module):
 
         out = self.upsampler(feat)
         return out
-"""TriFA-Net architectural components.
+"""GSA-LN architectural components.
 
-This module defines the building blocks used by TriFANet:
+This module defines the building blocks used by GSALN:
 - ResidualBlock: EDSR-style residual block (no batchnorm)
 - ChannelAttention: Frequency Channel Attention (FCA-FFT) for per-channel gating
 - SpatialAttention: Deformed Spatial Attention (DSA) using DCNv2Pack
 - FrequencyAttention: Simple frequency magnitude modulation
-- TriFANet: Super-resolution network composed of the above modules
+- GSALN: Super-resolution network composed of the above modules
 """
