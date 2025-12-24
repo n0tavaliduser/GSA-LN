@@ -49,9 +49,9 @@ network_g:
   shift_mag: False
 
 path:
-  pretrain_network_g: experiments/GSALN_x2_enc/models/net_g_470000.pth
+  pretrain_network_g: experiments/GSALN_x2_tta_x8/models/net_g_470000.pth
   strict_load_g: True
-  resume_state: experiments/GSALN_x2_enc/training_state/470000.state
+  resume_state: experiments/GSALN_x2_tta_x8/training_state/470000.state
 
 train:
   optim_g:
