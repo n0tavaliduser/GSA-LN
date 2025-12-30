@@ -443,7 +443,7 @@ def main():
             # Our Model
             our_crop = res_our[cy:cy+crop_size, cx:cx+crop_size]
             comp_items.append({
-                'name': 'Our Model (GSA-LN)',
+                'name': 'GSA-LN (ours)',
                 'img': our_crop,
                 'psnr': psnr_our,
                 'ssim': ssim_our,
