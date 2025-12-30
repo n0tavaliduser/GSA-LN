@@ -17,6 +17,7 @@ from basicsr.archs.swinir_arch import SwinIR
 from basicsr.archs.rrdbnet_arch import RRDBNet
 from basicsr.archs.edsr_arch import EDSR
 from basicsr.archs.rcan_arch import RCAN
+from basicsr.archs.vdsr_arch import VDSR
 # Some basicsr versions differ in tensor2img import, try utils module
 try:
     from basicsr.utils import tensor2img
@@ -38,13 +39,48 @@ def load_image(path):
     img = img.astype(np.float32) / 255.
     return img
 
-def inference_model(model, img_lr, device):
-    img_lr_tensor = img2tensor(img_lr, bgr2rgb=True, float32=True).unsqueeze(0).to(device)
+def inference_model(model, img_lr, device, window_size=None, scale=2):
+    """
+    Run inference on a model with optional padding for window-based models.
+    
+    Args:
+        model: The SR model
+        img_lr: LR image as numpy array (H, W, C) in float32 [0, 1]
+        device: torch device
+        window_size: If provided, pad input to be divisible by this value
+        scale: Upscale factor for cropping output after padding
+    """
+    h, w, _ = img_lr.shape
+    
+    # Calculate padding if window_size is specified
+    if window_size is not None:
+        pad_h = (window_size - h % window_size) % window_size
+        pad_w = (window_size - w % window_size) % window_size
+        
+        if pad_h > 0 or pad_w > 0:
+            # Pad with reflection
+            img_lr_padded = cv2.copyMakeBorder(img_lr, 0, pad_h, 0, pad_w, cv2.BORDER_REFLECT_101)
+        else:
+            img_lr_padded = img_lr
+    else:
+        img_lr_padded = img_lr
+        pad_h, pad_w = 0, 0
+    
+    img_lr_tensor = img2tensor(img_lr_padded, bgr2rgb=True, float32=True).unsqueeze(0).to(device)
     
     with torch.no_grad():
         output = model(img_lr_tensor)
+    
+    result = tensor2img(output, rgb2bgr=True, min_max=(0, 1))
+    
+    # Crop padding from output (scaled by upscale factor)
+    if pad_h > 0 or pad_w > 0:
+        out_h = h * scale
+        out_w = w * scale
+        result = result[:out_h, :out_w, :]
         
-    return tensor2img(output, rgb2bgr=True, min_max=(0, 1))
+    return result
+
 
 def get_metrics(img_sr, img_hr, crop_border, test_y_channel=True):
     # img_sr and img_hr should be uint8 images (0-255) in BGR order
@@ -97,10 +133,21 @@ def get_text_size_pil(text, font_path='arial.ttf', font_size=20):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--input_path', type=str, default='datasets/single', help='Path to image or directory containing images')
     parser.add_argument('--config', type=str, default='options/test/test_gsaln_x2_tta_x8.yml', help='Path to our model config')
     parser.add_argument('--output_dir', type=str, default='results/comparison', help='Output directory for results')
     args = parser.parse_args()
+
+    # ==================== CONFIGURATION ====================
+    # Benchmark datasets to process
+    BENCHMARK_DATASETS = [
+        'Set5', 
+        # 'Set14', 
+        # 'Urban100', 
+        # 'B100', 
+        # 'Manga109'
+    ]
+    BENCHMARK_BASE_PATH = 'datasets/benchmark'
+    # ========================================================
 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"Using device: {device}")
@@ -147,63 +194,80 @@ def main():
     
     model_g.eval()
     model_g.to(device)
-
+    # Other models configuration - uses 'scale' variable from config
     other_models_config = [
-        # {'name': 'ESRGAN', 'path': 'models/ESRGAN_x2.pth', 'arch': RRDBNet, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'scale': 2, 'num_feat': 64, 'num_block': 23}},
-        {'name': 'SwinIR', 'path': 'models/SwinIR_x2.pth', 'arch': SwinIR, 'args': {'upscale': 2, 'in_chans': 3, 'img_size': 64, 'window_size': 8, 'img_range': 1., 'depths': [6, 6, 6, 6, 6, 6], 'embed_dim': 180, 'num_heads': [6, 6, 6, 6, 6, 6], 'mlp_ratio': 2, 'upsampler': 'pixelshuffle', 'resi_connection': '1conv'}},
-        {'name': 'EDSR', 'path': 'models/EDSR_x2.pth', 'arch': EDSR, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_block': 16, 'upscale': 2, 'res_scale': 1.0, 'img_range': 255., 'rgb_mean': (0.4488, 0.4371, 0.4040)}},
-        {'name': 'RCAN', 'path': 'models/RCAN_x2.pth', 'arch': RCAN, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_group': 10, 'num_block': 20, 'squeeze_factor': 16, 'upscale': 2, 'res_scale': 1.0, 'img_range': 255., 'rgb_mean': (0.4488, 0.4371, 0.4040)}},
+        # {'name': 'ESRGAN', 'path': f'models/ESRGAN_x{scale}.pth', 'arch': RRDBNet, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'scale': scale, 'num_feat': 64, 'num_block': 23}},
+        # {'name': 'SwinIR', 'path': f'models/SwinIR_x{scale}.pth', 'arch': SwinIR, 'window_size': 8, 'args': {'upscale': scale, 'in_chans': 3, 'img_size': 64, 'window_size': 8, 'img_range': 1., 'depths': [6, 6, 6, 6, 6, 6], 'embed_dim': 180, 'num_heads': [6, 6, 6, 6, 6, 6], 'mlp_ratio': 2, 'upsampler': 'pixelshuffle', 'resi_connection': '1conv'}},
+        {'name': 'EDSR', 'path': f'models/EDSR_x{scale}.pth', 'arch': EDSR, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_block': 16, 'upscale': scale, 'res_scale': 1.0, 'img_range': 255., 'rgb_mean': (0.4488, 0.4371, 0.4040)}},
+        # {'name': 'RCAN', 'path': f'models/RCAN_x{scale}.pth', 'arch': RCAN, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_group': 10, 'num_block': 20, 'squeeze_factor': 16, 'upscale': scale, 'res_scale': 1.0, 'img_range': 255., 'rgb_mean': (0.4488, 0.4371, 0.4040)}},
+        {'name': 'VDSR', 'path': f'models/VDSR_x{scale}.pth', 'arch': VDSR, 'uses_bicubic_input': True, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_block': 18}},
     ]
     
-    # Determine input images
-    img_paths = []
-    if os.path.isdir(args.input_path):
-        print(f"Scanning directory {args.input_path} for images...")
-        for root, _, files in os.walk(args.input_path):
-            for file in files:
-                if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
-                    img_paths.append(os.path.join(root, file))
-    elif os.path.isfile(args.input_path):
-        img_paths.append(args.input_path)
-    else:
-        print(f"Error: Input path {args.input_path} not found.")
+    # Resolve benchmark base path
+    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+    benchmark_base = os.path.join(project_root, BENCHMARK_BASE_PATH)
+    
+    # Collect image pairs (HR, LR) from benchmark datasets
+    img_pairs = []  # List of (hr_path, lr_path, dataset_name)
+    for dataset_name in BENCHMARK_DATASETS:
+        hr_dir = os.path.join(benchmark_base, dataset_name, 'HR')
+        lr_dir = os.path.join(benchmark_base, dataset_name, 'LR_bicubic', f'X{scale}')
+        
+        if not os.path.exists(hr_dir):
+            print(f"Warning: HR directory not found: {hr_dir}")
+            continue
+        if not os.path.exists(lr_dir):
+            print(f"Warning: LR directory not found: {lr_dir}")
+            continue
+        
+        print(f"Scanning {dataset_name}...")
+        for file in os.listdir(hr_dir):
+            if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
+                hr_path = os.path.join(hr_dir, file)
+                # LR filename typically has x{scale} suffix, e.g., baby.png -> babyx2.png
+                base_name = os.path.splitext(file)[0]
+                ext = os.path.splitext(file)[1]
+                lr_filename = f"{base_name}x{scale}{ext}"
+                lr_path = os.path.join(lr_dir, lr_filename)
+                
+                if os.path.exists(lr_path):
+                    img_pairs.append((hr_path, lr_path, dataset_name))
+                else:
+                    print(f"Warning: LR image not found for {file}: {lr_path}")
+
+    if not img_pairs:
+        print("No image pairs found to process.")
         return
 
-    if not img_paths:
-        print("No images found to process.")
-        return
-
-    print(f"Found {len(img_paths)} images.")
+    print(f"Found {len(img_pairs)} image pairs from {len(BENCHMARK_DATASETS)} datasets.")
 
     # Create output directory
     os.makedirs(args.output_dir, exist_ok=True)
 
     # 3. Process Images Loop
-    for idx, img_path in enumerate(img_paths):
-        print(f"[{idx+1}/{len(img_paths)}] Processing {img_path}...")
+    for idx, (hr_path, lr_path, dataset_name) in enumerate(img_pairs):
+        print(f"[{idx+1}/{len(img_pairs)}] Processing {dataset_name}/{os.path.basename(hr_path)}...")
         
         try:
-            img_hr = load_image(img_path)
-            h, w, _ = img_hr.shape
-
-            # Ensure divisible by scale and model requirements (SwinIR needs window_size=8 in LR)
-            # Safe divisor: scale * 8.
-            divisor = scale * 8
-            if h < divisor or w < divisor:
-                print(f"Skipping {img_path}: Image too small ({w}x{h}) for divisor {divisor}")
-                continue
-                
-            h_new, w_new = h - h % divisor, w - w % divisor
-            img_hr = img_hr[:h_new, :w_new, :]
+            # Load HR and LR images directly from benchmark
+            img_hr = load_image(hr_path)
+            img_lr = load_image(lr_path)
             
-            # Generate LR (Downsample)
-            img_lr = cv2.resize(img_hr, (w_new // scale, h_new // scale), interpolation=cv2.INTER_CUBIC)
+            h_hr, w_hr, _ = img_hr.shape
+            h_lr, w_lr, _ = img_lr.shape
+            
+            # HR dimensions should match LR * scale
+            h_new, w_new = h_lr * scale, w_lr * scale
+            
+            # Crop HR if needed to match expected dimensions
+            if h_hr != h_new or w_hr != w_new:
+                img_hr = img_hr[:h_new, :w_new, :]
 
-            # Generate Bicubic Upscale (Baseline)
+            # Generate Bicubic Upscale (Baseline) from LR
             img_bicubic = cv2.resize(img_lr, (w_new, h_new), interpolation=cv2.INTER_CUBIC)
 
             # 4. Inference Our Model
-            res_our = inference_model(model_g, img_lr, device)
+            res_our = inference_model(model_g, img_lr, device, scale=scale)
 
             # 5. Inference Other Models
             results_others = []
@@ -333,9 +397,12 @@ def main():
                                         
                                 elif k.startswith('tail.'):
                                     # tail.0.0 -> upsample.0
+                                    # tail.0.2 -> upsample.2 (for x4 scale)
                                     # tail.1 -> conv_last
                                     if 'tail.0.0.' in k:
                                         mapped_dict[k.replace('tail.0.0.', 'upsample.0.')] = v
+                                    elif 'tail.0.2.' in k:
+                                        mapped_dict[k.replace('tail.0.2.', 'upsample.2.')] = v
                                     elif 'tail.1.' in k:
                                         mapped_dict[k.replace('tail.1.', 'conv_last.')] = v
                                     else:
@@ -347,9 +414,51 @@ def main():
                             
                             state_dict = mapped_dict
 
+                    # Specific handling for VDSR mismatch (original naming vs our architecture)
+                    # Original checkpoint: conv_1, conv_2_to_19.conv_X (X=2-19), conv_20
+                    # Our architecture: conv_first, body.0/2/4/.../34, conv_last
+                    if m_name == 'VDSR':
+                        if 'conv_1.weight' in state_dict:
+                            mapped_dict = OrderedDict()
+                            for k, v in state_dict.items():
+                                if k.startswith('conv_1.'):
+                                    # conv_1 -> conv_first
+                                    mapped_dict[k.replace('conv_1.', 'conv_first.')] = v
+                                elif k.startswith('conv_2_to_19.'):
+                                    # conv_2_to_19.conv_X -> body.((X-2)*2)
+                                    # e.g., conv_2_to_19.conv_2 -> body.0
+                                    #       conv_2_to_19.conv_3 -> body.2
+                                    #       conv_2_to_19.conv_19 -> body.34
+                                    import re
+                                    match = re.match(r'conv_2_to_19\.conv_(\d+)\.(.*)', k)
+                                    if match:
+                                        conv_idx = int(match.group(1))
+                                        suffix = match.group(2)
+                                        body_idx = (conv_idx - 2) * 2
+                                        new_k = f'body.{body_idx}.{suffix}'
+                                        mapped_dict[new_k] = v
+                                    else:
+                                        mapped_dict[k] = v
+                                elif k.startswith('conv_20.'):
+                                    # conv_20 -> conv_last
+                                    mapped_dict[k.replace('conv_20.', 'conv_last.')] = v
+                                else:
+                                    mapped_dict[k] = v
+                            
+                            state_dict = mapped_dict
+
                     model_other.load_state_dict(state_dict, strict=True)
                     model_other.eval().to(device)
-                    res = inference_model(model_other, img_lr, device)
+                    # Get window_size from config if available (for SwinIR, etc.)
+                    ws = m_conf.get('window_size', None)
+                    
+                    # VDSR and similar models require bicubic-upscaled input
+                    if m_conf.get('uses_bicubic_input', False):
+                        # Upscale LR to HR size using bicubic first
+                        img_bicubic_input = cv2.resize(img_lr, (w_new, h_new), interpolation=cv2.INTER_CUBIC)
+                        res = inference_model(model_other, img_bicubic_input, device, window_size=ws, scale=1)
+                    else:
+                        res = inference_model(model_other, img_lr, device, window_size=ws, scale=scale)
                     results_others.append((m_name, res))
                 except Exception as e:
                     print(f"Error running {m_name}: {e}")
@@ -503,9 +612,20 @@ def main():
             padding = 10 
             
             # Use separate variable so logic below holds
-            # Separate HR (Full) from others (Crops)
-            label_hr = "Original Image"
-            img_hr_vis = img_hr_full_vis
+            # Show LR input image (the actual input to models) with crop box
+            label_hr = "LR input"
+            
+            # Draw red box on LR image to show crop area
+            # Crop coordinates are for HR, so divide by scale for LR
+            lr_cx = cx // scale
+            lr_cy = cy // scale
+            lr_crop_size = crop_size // scale
+            img_lr_with_box = img_lr_disp.copy()
+            cv2.rectangle(img_lr_with_box, 
+                         (lr_cx, lr_cy), 
+                         (lr_cx + lr_crop_size, lr_cy + lr_crop_size), 
+                         (0, 0, 255), 2)  # Red color, thickness 2
+            img_hr_vis = img_lr_with_box  # Use LR image with box
             
             # Helper to create labeled image with colored parts
             def create_labeled_chip(img, name_txt, metric_parts, target_h=None, target_w=None):
@@ -658,15 +778,15 @@ def main():
             combined_image[y_rg:y_rg+right_grid_img.shape[0], x_rg:x_rg+right_grid_img.shape[1]] = right_grid_img
 
             # 8. Save
-            base_name = os.path.splitext(os.path.basename(img_path))[0]
-            output_name = f"comparison_{base_name}.png"
+            img_base_name = os.path.splitext(os.path.basename(hr_path))[0]
+            output_name = f"comparison_{dataset_name}_{img_base_name}.png"
             output_path = os.path.join(args.output_dir, output_name)
             
             cv2.imwrite(output_path, combined_image)
             print(f"Saved: {output_path}")
 
         except Exception as e:
-            print(f"Failed to process {img_path}: {e}")
+            print(f"Failed to process {dataset_name}/{os.path.basename(hr_path)}: {e}")
             import traceback
             traceback.print_exc()
 
