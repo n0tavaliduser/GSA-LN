@@ -1,6 +1,6 @@
-name: GSA-LN_x2_tta_x8
+name: GSA-LN_x3_tta_x8
 model_type: SRModel
-scale: 2
+scale: 3
 num_gpu: 1
 
 datasets:
@@ -9,8 +9,8 @@ datasets:
     name: Set5
     type: PairedImageDataset
     dataroot_gt: datasets/benchmark/Set5/HR
-    dataroot_lq: datasets/benchmark/Set5/LR_bicubic/X2
-    filename_tmpl: '{}x2'
+    dataroot_lq: datasets/benchmark/Set5/LR_bicubic/X3
+    filename_tmpl: '{}x3'
     io_backend:
       type: disk
 
@@ -19,8 +19,8 @@ datasets:
     name: Set14
     type: PairedImageDataset
     dataroot_gt: datasets/benchmark/Set14/HR
-    dataroot_lq: datasets/benchmark/Set14/LR_bicubic/X2
-    filename_tmpl: '{}x2'
+    dataroot_lq: datasets/benchmark/Set14/LR_bicubic/X3
+    filename_tmpl: '{}x3'
     io_backend:
       type: disk
 
@@ -29,8 +29,8 @@ datasets:
     name: B100
     type: PairedImageDataset
     dataroot_gt: datasets/benchmark/B100/HR
-    dataroot_lq: datasets/benchmark/B100/LR_bicubic/X2
-    filename_tmpl: '{}x2'
+    dataroot_lq: datasets/benchmark/B100/LR_bicubic/X3
+    filename_tmpl: '{}x3'
     io_backend:
       type: disk
 
@@ -39,8 +39,8 @@ datasets:
     name: Urban100
     type: PairedImageDataset
     dataroot_gt: datasets/benchmark/Urban100/HR
-    dataroot_lq: datasets/benchmark/Urban100/LR_bicubic/X2
-    filename_tmpl: '{}x2'
+    dataroot_lq: datasets/benchmark/Urban100/LR_bicubic/X3
+    filename_tmpl: '{}x3'
     io_backend:
       type: disk
 
@@ -49,8 +49,8 @@ datasets:
     name: Manga109
     type: PairedImageDataset
     dataroot_gt: datasets/benchmark/Manga109/HR
-    dataroot_lq: datasets/benchmark/Manga109/LR_bicubic/X2
-    filename_tmpl: '{}_LRBI_x2'
+    dataroot_lq: datasets/benchmark/Manga109/LR_bicubic/X3
+    filename_tmpl: '{}_LRBI_x3'
     io_backend:
       type: disk
 
@@ -60,7 +60,7 @@ network_g:
   num_out_ch: 3
   num_feat: 64
   num_blocks: 32
-  upscale: 2
+  upscale: 3
   freq_mb: True
   low_thr: 0.33
   mid_thr: 0.66
@@ -68,7 +68,7 @@ network_g:
   shift_mag: False
 
 path:
-  pretrain_network_g: experiments/GSA-LN_DF2K_x2/models/net_g_470000.pth
+  pretrain_network_g: experiments/GSA-LN_DF2K_x3/models/net_g_365000.pth
   strict_load_g: True
   resume_state: ~
 

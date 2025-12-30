@@ -14,7 +14,7 @@ datasets:
     io_backend:
       type: disk
 
-    gt_size: 192
+    gt_size: 192 # [192 x 192 => 384 x 384]
     use_hflip: True
     use_rot: True
 
