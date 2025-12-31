@@ -226,10 +226,17 @@ def main():
         for file in os.listdir(hr_dir):
             if file.lower().endswith(('.png', '.jpg', '.jpeg', '.bmp')):
                 hr_path = os.path.join(hr_dir, file)
-                # LR filename typically has x{scale} suffix, e.g., baby.png -> babyx2.png
                 base_name = os.path.splitext(file)[0]
                 ext = os.path.splitext(file)[1]
-                lr_filename = f"{base_name}x{scale}{ext}"
+                
+                # Different datasets use different LR filename patterns
+                if dataset_name == 'Manga109':
+                    # Manga109 uses: {base_name}_LRBI_x{scale}.png
+                    lr_filename = f"{base_name}_LRBI_x{scale}.png"
+                else:
+                    # Default pattern: {base_name}x{scale}{ext}
+                    lr_filename = f"{base_name}x{scale}{ext}"
+                
                 lr_path = os.path.join(lr_dir, lr_filename)
                 
                 if os.path.exists(lr_path):
