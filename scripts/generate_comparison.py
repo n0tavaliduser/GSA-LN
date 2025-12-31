@@ -18,6 +18,7 @@ from basicsr.archs.rrdbnet_arch import RRDBNet
 from basicsr.archs.edsr_arch import EDSR
 from basicsr.archs.rcan_arch import RCAN
 from basicsr.archs.vdsr_arch import VDSR
+from basicsr.archs.srcnn_arch import SRCNN
 # Some basicsr versions differ in tensor2img import, try utils module
 try:
     from basicsr.utils import tensor2img
@@ -201,6 +202,7 @@ def main():
         {'name': 'EDSR', 'path': f'models/EDSR_x{scale}.pth', 'arch': EDSR, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_block': 16, 'upscale': scale, 'res_scale': 1.0, 'img_range': 255., 'rgb_mean': (0.4488, 0.4371, 0.4040)}},
         # {'name': 'RCAN', 'path': f'models/RCAN_x{scale}.pth', 'arch': RCAN, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_group': 10, 'num_block': 20, 'squeeze_factor': 16, 'upscale': scale, 'res_scale': 1.0, 'img_range': 255., 'rgb_mean': (0.4488, 0.4371, 0.4040)}},
         {'name': 'VDSR', 'path': f'models/VDSR_x{scale}.pth', 'arch': VDSR, 'uses_bicubic_input': True, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_block': 18}},
+        {'name': 'SRCNN', 'path': f'models/SRCNN_x{scale}.pth', 'arch': SRCNN, 'uses_bicubic_input': True, 'y_channel_only': True, 'args': {'num_in_ch': 1, 'num_out_ch': 1, 'num_feat': 64, 'num_feat2': 32}},
     ]
     
     # Resolve benchmark base path
@@ -265,6 +267,7 @@ def main():
 
             # Generate Bicubic Upscale (Baseline) from LR
             img_bicubic = cv2.resize(img_lr, (w_new, h_new), interpolation=cv2.INTER_CUBIC)
+            img_bicubic = np.clip(img_bicubic, 0, 1)  # Clip to prevent color artifacts from overshoot
 
             # 4. Inference Our Model
             res_our = inference_model(model_g, img_lr, device, scale=scale)
@@ -447,6 +450,27 @@ def main():
                             
                             state_dict = mapped_dict
 
+                    # Specific handling for SRCNN mismatch
+                    # Common checkpoint naming patterns for SRCNN
+                    if m_name == 'SRCNN':
+                        # Check for various naming conventions
+                        # Pattern 1: layer1, layer2, layer3 (common in some repos)
+                        if 'layer1.weight' in state_dict or 'layer1.0.weight' in state_dict:
+                            mapped_dict = OrderedDict()
+                            for k, v in state_dict.items():
+                                if k.startswith('layer1.0.') or k.startswith('layer1.'):
+                                    new_k = k.replace('layer1.0.', 'conv1.').replace('layer1.', 'conv1.')
+                                    mapped_dict[new_k] = v
+                                elif k.startswith('layer2.0.') or k.startswith('layer2.'):
+                                    new_k = k.replace('layer2.0.', 'conv2.').replace('layer2.', 'conv2.')
+                                    mapped_dict[new_k] = v
+                                elif k.startswith('layer3.0.') or k.startswith('layer3.'):
+                                    new_k = k.replace('layer3.0.', 'conv3.').replace('layer3.', 'conv3.')
+                                    mapped_dict[new_k] = v
+                                else:
+                                    mapped_dict[k] = v
+                            state_dict = mapped_dict
+
                     model_other.load_state_dict(state_dict, strict=True)
                     model_other.eval().to(device)
                     # Get window_size from config if available (for SwinIR, etc.)
@@ -456,7 +480,31 @@ def main():
                     if m_conf.get('uses_bicubic_input', False):
                         # Upscale LR to HR size using bicubic first
                         img_bicubic_input = cv2.resize(img_lr, (w_new, h_new), interpolation=cv2.INTER_CUBIC)
-                        res = inference_model(model_other, img_bicubic_input, device, window_size=ws, scale=1)
+                        img_bicubic_input = np.clip(img_bicubic_input, 0, 1)  # Clip to prevent artifacts
+                        
+                        # Handle Y-channel only models (like original SRCNN)
+                        if m_conf.get('y_channel_only', False):
+                            # Convert BGR to YCbCr
+                            img_bicubic_uint8 = (img_bicubic_input * 255.0).round().astype(np.uint8)
+                            img_ycbcr = cv2.cvtColor(img_bicubic_uint8, cv2.COLOR_BGR2YCrCb)
+                            
+                            # Extract Y channel and normalize to [0, 1]
+                            y_channel = img_ycbcr[:, :, 0:1].astype(np.float32) / 255.0
+                            
+                            # Run inference on Y channel only
+                            y_tensor = torch.from_numpy(y_channel.transpose(2, 0, 1)).unsqueeze(0).to(device)
+                            with torch.no_grad():
+                                y_sr = model_other(y_tensor)
+                            y_sr = y_sr.squeeze(0).cpu().numpy().transpose(1, 2, 0)
+                            y_sr = np.clip(y_sr * 255.0, 0, 255).astype(np.uint8)
+                            
+                            # Combine SR Y with bicubic CbCr
+                            img_ycbcr[:, :, 0] = y_sr[:, :, 0]
+                            
+                            # Convert back to BGR
+                            res = cv2.cvtColor(img_ycbcr, cv2.COLOR_YCrCb2BGR)
+                        else:
+                            res = inference_model(model_other, img_bicubic_input, device, window_size=ws, scale=1)
                     else:
                         res = inference_model(model_other, img_lr, device, window_size=ws, scale=scale)
                     results_others.append((m_name, res))
