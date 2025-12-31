@@ -142,10 +142,10 @@ def main():
     # Benchmark datasets to process
     BENCHMARK_DATASETS = [
         'Set5', 
-        # 'Set14', 
-        # 'Urban100', 
-        # 'B100', 
-        # 'Manga109'
+        'Set14', 
+        'Urban100', 
+        'B100', 
+        'Manga109'
     ]
     BENCHMARK_BASE_PATH = 'datasets/benchmark'
     # ========================================================
@@ -201,8 +201,8 @@ def main():
         # {'name': 'SwinIR', 'path': f'models/SwinIR_x{scale}.pth', 'arch': SwinIR, 'window_size': 8, 'args': {'upscale': scale, 'in_chans': 3, 'img_size': 64, 'window_size': 8, 'img_range': 1., 'depths': [6, 6, 6, 6, 6, 6], 'embed_dim': 180, 'num_heads': [6, 6, 6, 6, 6, 6], 'mlp_ratio': 2, 'upsampler': 'pixelshuffle', 'resi_connection': '1conv'}},
         {'name': 'EDSR', 'path': f'models/EDSR_x{scale}.pth', 'arch': EDSR, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_block': 16, 'upscale': scale, 'res_scale': 1.0, 'img_range': 255., 'rgb_mean': (0.4488, 0.4371, 0.4040)}},
         # {'name': 'RCAN', 'path': f'models/RCAN_x{scale}.pth', 'arch': RCAN, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_group': 10, 'num_block': 20, 'squeeze_factor': 16, 'upscale': scale, 'res_scale': 1.0, 'img_range': 255., 'rgb_mean': (0.4488, 0.4371, 0.4040)}},
-        {'name': 'VDSR', 'path': f'models/VDSR_x{scale}.pth', 'arch': VDSR, 'uses_bicubic_input': True, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_block': 18}},
         {'name': 'SRCNN', 'path': f'models/SRCNN_x{scale}.pth', 'arch': SRCNN, 'uses_bicubic_input': True, 'y_channel_only': True, 'args': {'num_in_ch': 1, 'num_out_ch': 1, 'num_feat': 64, 'num_feat2': 32}},
+        {'name': 'VDSR', 'path': f'models/VDSR_x{scale}.pth', 'arch': VDSR, 'uses_bicubic_input': True, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_block': 18}},
     ]
     
     # Resolve benchmark base path
