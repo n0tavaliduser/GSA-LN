@@ -8,7 +8,7 @@ from basicsr.archs.arch_util import DCNv2Pack
 class ResidualBlock(nn.Module):
     """Residual block without batch normalization.
 
-    Structure: Conv(3x3) → ReLU → Conv(3x3) with residual scaling (0.1).
+    Structure: Conv(3x3) -> ReLU -> Conv(3x3) -> SE Block -> Residual Scaling (0.1).
 
     Args:
         num_feat (int): Number of feature channels.
@@ -22,6 +22,15 @@ class ResidualBlock(nn.Module):
         self.conv2 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
         self.relu = nn.ReLU(inplace=True)
 
+        # Simple Channel Attention (SE Layer)
+        self.se = nn.Sequential(
+            nn.AdaptiveAvgPool2d(1),
+            nn.Conv2d(num_feat, num_feat // 16, 1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(num_feat // 16, num_feat, 1),
+            nn.Sigmoid()
+        )
+
     def forward(self, x):
         """Forward pass.
 
@@ -34,6 +43,10 @@ class ResidualBlock(nn.Module):
         res = self.conv1(x)
         res = self.relu(res)
         res = self.conv2(res)
+
+        # Apply SE Attention
+        res = res * self.se(res)
+
         return x + res * 0.1
 
 
@@ -115,15 +128,18 @@ class FrequencyAttention(nn.Module):
         super().__init__()
         self.scale = nn.Parameter(torch.ones(1))
 
-    def forward(self, x):
+    def forward(self, x, fft_mag=None):
         """Apply frequency-based modulation.
 
         Args:
             x (Tensor): Feature map (B, C, H, W).
+            fft_mag (Tensor, optional): Precomputed rFFT magnitude (ignored here as we need complex spec).
 
         Returns:
             Tensor: Modulated feature map (B, C, H, W).
         """
+        # We need the complex spectrum (spec) for irfft2 reconstruction.
+        # Even if fft_mag is passed, we cannot recover phase, so we must recompute rfft2.
         spec = torch.fft.rfft2(x, norm='ortho')
         mag = torch.abs(spec)
         w = mag / (torch.mean(mag, dim=(-2, -1), keepdim=True) + 1e-6)
