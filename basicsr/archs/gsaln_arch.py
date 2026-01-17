@@ -59,17 +59,20 @@ class ChannelAttention(nn.Module):
             nn.Sigmoid()
         )
 
-    def forward(self, x):
+    def forward(self, x, fft_mag=None):
         """Compute channel gating weights from frequency descriptors.
 
         Args:
             x (Tensor): Feature map (B, C, H, W).
+            fft_mag (Tensor, optional): Precomputed rFFT magnitude.
 
         Returns:
             Tensor: Modulated feature map (B, C, H, W).
         """
         b, c, _, _ = x.size()
-        fft_mag = torch.abs(torch.fft.rfft2(x, norm='ortho'))
+        b, c, _, _ = x.size()
+        if fft_mag is None:
+            fft_mag = torch.abs(torch.fft.rfft2(x, norm='ortho'))
         desc = torch.log1p(fft_mag).mean(dim=(-2, -1))
         desc = self.ln(desc)
         y = self.fc(desc).view(b, c, 1, 1)
@@ -152,10 +155,12 @@ class FrequencyAttentionMB(nn.Module):
         self.register_buffer('high_mask', torch.tensor([]), persistent=False)
 
     def _ensure_masks(self, h, w, device, dtype):
-        if self.r_norm.numel() == 0 or self.r_norm.shape != (h, w):
+        # Using rfft2, mask width is w//2 + 1
+        w_half = w // 2 + 1
+        if self.r_norm.numel() == 0 or self.r_norm.shape != (h, w_half):
             if self.mask_order == 'natural':
                 fy = torch.fft.fftfreq(h, d=1.0).to(device=device, dtype=dtype).view(h, 1)
-                fx = torch.fft.fftfreq(w, d=1.0).to(device=device, dtype=dtype).view(1, w)
+                fx = torch.fft.rfftfreq(w, d=1.0).to(device=device, dtype=dtype).view(1, w_half)
                 r = torch.sqrt(fy ** 2 + fx ** 2)
             else:
                 yy = torch.arange(h, device=device, dtype=dtype).view(h, 1)
@@ -172,11 +177,16 @@ class FrequencyAttentionMB(nn.Module):
             self.mid_mask = mid
             self.high_mask = high
 
-    def forward(self, x):
+    def forward(self, x, fft_mag=None):
         b, c, h, w = x.shape
-        mag = torch.abs(torch.fft.fft2(x, norm='ortho'))
-        if self.mask_order != 'natural' and self.shift_mag:
-            mag = torch.fft.fftshift(mag, dim=(-2, -1))
+        if fft_mag is None:
+            fft_mag = torch.abs(torch.fft.rfft2(x, norm='ortho'))
+        mag = fft_mag
+        
+        # shift_mag logic for rfft is skipped/simplified as we stick to natural order for optimization
+        # if self.mask_order != 'natural' and self.shift_mag:
+        #     mag = torch.fft.fftshift(mag, dim=(-2, -1))
+        
         self._ensure_masks(h, w, x.device, mag.dtype)
         low_mean = (mag * self.low_mask).mean(dim=(-2, -1))
         mid_mean = (mag * self.mid_mask).mean(dim=(-2, -1))
@@ -237,9 +247,14 @@ class GSALN(nn.Module):
         res = self.conv_mid(res)
         feat_backbone = feat + res
 
-        feat_ca = self.ca(feat_backbone)
+        # Precompute FFT (rfft2) for efficiency
+        # Using rfft2 reduces computation by ~2x compared to fft2 and is sufficient for magnitude stats
+        fft_spec = torch.fft.rfft2(feat_backbone, norm='ortho')
+        fft_mag = torch.abs(fft_spec)
+
+        feat_ca = self.ca(feat_backbone, fft_mag=fft_mag)
         feat_sa = self.sa(feat_backbone)
-        feat_fa = self.fa(feat_backbone)
+        feat_fa = self.fa(feat_backbone, fft_mag=fft_mag)
 
         feat_cat = torch.cat([feat_ca, feat_sa, feat_fa], dim=1)
         feat_fused = self.fusion(feat_cat)
