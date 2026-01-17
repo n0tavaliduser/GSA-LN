@@ -149,70 +149,84 @@ class FrequencyAttention(nn.Module):
         m = torch.clamp(m, -1.0, 1.0)
         return x * (1 + self.scale * m)
 
-class FrequencyAttentionMB(nn.Module):
-    """Multi-band frequency attention with low/mid/high bands."""
-    def __init__(self, num_feat, low_thr=0.33, mid_thr=0.66, mask_order='natural', shift_mag=False):
+class FrequencyAttentionLearnable(nn.Module):
+    """
+    Frequency Attention with Adaptive Mask (Learnable).
+    
+    Instead of using rigid thresholds and circular shapes,
+    this module uses a small MLP to predict frequency masks
+    based on coordinates (u, v).
+    """
+    def __init__(self, num_feat, hidden_dim=32):
         super().__init__()
-        self.low_thr = low_thr
-        self.mid_thr = mid_thr
-        self.mask_order = mask_order
-        self.shift_mag = shift_mag
         self.scale = nn.Parameter(torch.ones(1))
-        self.mlp = nn.Sequential(
+        
+        # Mask Predictor MLP: Input (x, y) -> Output (Low, Mid, High probabilities)
+        self.mask_predictor = nn.Sequential(
+            nn.Linear(2, hidden_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim, 3) # 3 bands: Low, Mid, High
+        )
+        
+        # Feature MLP
+        self.mlp_feat = nn.Sequential(
             nn.Linear(3, 3, bias=False),
             nn.ReLU(inplace=True),
             nn.Linear(3, 3, bias=False),
             nn.Sigmoid()
         )
         self.ln3 = nn.LayerNorm(3)
-        self.register_buffer('r_norm', torch.tensor([]), persistent=False)
-        self.register_buffer('low_mask', torch.tensor([]), persistent=False)
-        self.register_buffer('mid_mask', torch.tensor([]), persistent=False)
-        self.register_buffer('high_mask', torch.tensor([]), persistent=False)
 
-    def _ensure_masks(self, h, w, device, dtype):
-        # Using rfft2, mask width is w//2 + 1
-        w_half = w // 2 + 1
-        if self.r_norm.numel() == 0 or self.r_norm.shape != (h, w_half):
-            if self.mask_order == 'natural':
-                fy = torch.fft.fftfreq(h, d=1.0).to(device=device, dtype=dtype).view(h, 1)
-                fx = torch.fft.rfftfreq(w, d=1.0).to(device=device, dtype=dtype).view(1, w_half)
-                r = torch.sqrt(fy ** 2 + fx ** 2)
-            else:
-                yy = torch.arange(h, device=device, dtype=dtype).view(h, 1)
-                xx = torch.arange(w, device=device, dtype=dtype).view(1, w)
-                cy = (h - 1) / 2.0
-                cx = (w - 1) / 2.0
-                r = torch.sqrt((yy - cy) ** 2 + (xx - cx) ** 2)
-            r = r / (r.max() + 1e-6)
-            low = (r <= self.low_thr).to(dtype).view(1, 1, h, w)
-            mid = ((r > self.low_thr) & (r <= self.mid_thr)).to(dtype).view(1, 1, h, w)
-            high = (r > self.mid_thr).to(dtype).view(1, 1, h, w)
-            self.r_norm = r
-            self.low_mask = low
-            self.mid_mask = mid
-            self.high_mask = high
+    def _get_coord_grid(self, h, w, device, dtype):
+        # Create normalized coordinate grid [-1, 1]
+        # For rfft2, X axis is only [0, 1] because half spectrum
+        y = torch.linspace(-1, 1, h, device=device, dtype=dtype)
+        x = torch.linspace(0, 1, w, device=device, dtype=dtype)
+        grid_y, grid_x = torch.meshgrid(y, x, indexing='ij')
+        return torch.stack([grid_x, grid_y], dim=-1) # Shape: (H, W, 2)
 
     def forward(self, x, fft_mag=None):
         b, c, h, w = x.shape
+        
+        # 1. Compute FFT Magnitude (if not provided)
         if fft_mag is None:
-            fft_mag = torch.abs(torch.fft.rfft2(x, norm='ortho'))
+             spec = torch.fft.rfft2(x, norm='ortho')
+             fft_mag = torch.abs(spec)
+        
         mag = fft_mag
+        h_spec, w_spec = mag.shape[-2], mag.shape[-1] # w_spec is usually w//2 + 1
+
+        # 2. Generate Masks Dynamically
+        # Coordinate grid
+        coords = self._get_coord_grid(h_spec, w_spec, x.device, mag.dtype)
         
-        # shift_mag logic for rfft is skipped/simplified as we stick to natural order for optimization
-        # if self.mask_order != 'natural' and self.shift_mag:
-        #     mag = torch.fft.fftshift(mag, dim=(-2, -1))
-        
-        self._ensure_masks(h, w, x.device, mag.dtype)
-        low_mean = (mag * self.low_mask).mean(dim=(-2, -1))
-        mid_mean = (mag * self.mid_mask).mean(dim=(-2, -1))
-        high_mean = (mag * self.high_mask).mean(dim=(-2, -1))
+        # Predict mask weights for each frequency pixel
+        # Output: (H_spec, W_spec, 3) -> Softmax so total probability = 1
+        mask_weights = self.mask_predictor(coords) 
+        mask_weights = F.softmax(mask_weights, dim=-1) # Last dim: [Low, Mid, High]
+
+        # Separate into 3 physical masks
+        # Permute so channel is first for broadcasting: (3, 1, 1, H, W)
+        masks = mask_weights.permute(2, 0, 1).unsqueeze(1).unsqueeze(1) 
+        low_mask = masks[0]
+        mid_mask = masks[1]
+        high_mask = masks[2]
+
+        # 3. Weighted Pooling (Soft Masking)
+        # Using sum(mag * soft_mask) / sum(soft_mask) for weighted average
+        low_mean = (mag * low_mask).sum(dim=(-2, -1)) / (low_mask.sum(dim=(-2, -1)) + 1e-6)
+        mid_mean = (mag * mid_mask).sum(dim=(-2, -1)) / (mid_mask.sum(dim=(-2, -1)) + 1e-6)
+        high_mean = (mag * high_mask).sum(dim=(-2, -1)) / (high_mask.sum(dim=(-2, -1)) + 1e-6)
+
+        # 4. Attention Generation
         desc = torch.stack([low_mean, mid_mean, high_mean], dim=-1)
         desc = torch.log1p(desc)
         desc = self.ln3(desc)
-        g = self.mlp(desc.view(-1, 3)).view(b, c, 3)
+        
+        g = self.mlp_feat(desc.view(-1, 3)).view(b, c, 3)
         wsum = (g * desc).sum(dim=-1)
         y = wsum.view(b, c, 1, 1)
+        
         return x * (1 + self.scale * y)
 
 
@@ -230,7 +244,7 @@ class GSALN(nn.Module):
         num_blocks (int): Number of residual blocks in backbone.
         upscale (int): Upscaling factor for PixelShuffle.
     """
-    def __init__(self, num_in_ch=3, num_out_ch=3, num_feat=64, num_blocks=16, upscale=2, freq_mb=True, low_thr=0.33, mid_thr=0.66, mask_order='natural', shift_mag=False):
+    def __init__(self, num_in_ch=3, num_out_ch=3, num_feat=64, num_blocks=16, upscale=2, freq_mb=True):
         super().__init__()
 
         self.conv_in = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
@@ -239,7 +253,7 @@ class GSALN(nn.Module):
 
         self.ca = ChannelAttention(num_feat)
         self.sa = SpatialAttention(num_feat)
-        self.fa = FrequencyAttentionMB(num_feat, low_thr=low_thr, mid_thr=mid_thr, mask_order=mask_order, shift_mag=shift_mag) if freq_mb else FrequencyAttention()
+        self.fa = FrequencyAttentionLearnable(num_feat) if freq_mb else FrequencyAttention()
 
         self.fusion = nn.Conv2d(num_feat * 3, num_feat, 1, 1, 0)
 
