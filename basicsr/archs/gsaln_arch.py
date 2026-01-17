@@ -215,6 +215,8 @@ class GSALN(nn.Module):
         self.sa = SpatialAttention(num_feat)
         self.fa = FrequencyAttentionMB(num_feat, low_thr=low_thr, mid_thr=mid_thr, mask_order=mask_order, shift_mag=shift_mag) if freq_mb else FrequencyAttention()
 
+        self.fusion = nn.Conv2d(num_feat * 3, num_feat, 1, 1, 0)
+
         self.upsampler = nn.Sequential(
             nn.Conv2d(num_feat, num_feat * (upscale ** 2), 3, 1, 1),
             nn.PixelShuffle(upscale),
@@ -233,13 +235,17 @@ class GSALN(nn.Module):
         feat = self.conv_in(x)
         res = self.res_blocks(feat)
         res = self.conv_mid(res)
-        feat = feat + res
+        feat_backbone = feat + res
 
-        feat = self.ca(feat)
-        feat = self.sa(feat)
-        feat = self.fa(feat)
+        feat_ca = self.ca(feat_backbone)
+        feat_sa = self.sa(feat_backbone)
+        feat_fa = self.fa(feat_backbone)
 
-        out = self.upsampler(feat)
+        feat_cat = torch.cat([feat_ca, feat_sa, feat_fa], dim=1)
+        feat_fused = self.fusion(feat_cat)
+        feat_final = feat_fused + feat_backbone
+
+        out = self.upsampler(feat_final)
         return out
 """GSA-LN architectural components.
 
