@@ -302,7 +302,7 @@ class GSALN(nn.Module):
         self.sa = SpatialAttention(num_feat)
         self.fa = FrequencyAttentionLearnable(num_feat) if freq_mb else FrequencyAttention()
 
-        self.fusion = nn.Conv2d(num_feat * 3, num_feat, 1, 1, 0)
+        # self.fusion = nn.Conv2d(num_feat * 3, num_feat, 1, 1, 0) # Removed per Sequential Hybrid architecture
 
         self.upsampler = nn.Sequential(
             nn.Conv2d(num_feat, num_feat * (upscale ** 2), 3, 1, 1),
@@ -324,18 +324,21 @@ class GSALN(nn.Module):
         res = self.conv_mid(res)
         feat_backbone = feat + res
 
-        # Precompute FFT (rfft2) for efficiency
-        # Using rfft2 reduces computation by ~2x compared to fft2 and is sufficient for magnitude stats
-        fft_spec = torch.fft.rfft2(feat_backbone, norm='ortho')
+        # Langkah 1 (Channel)
+        feat_ca = self.ca(feat_backbone)
+
+        # Langkah 2 (Spatial/DCN)
+        feat_sa = self.sa(feat_ca)
+
+        # Langkah 3 (Frequency/Fourier)
+        # Recompute FFT on the output of Spatial Step
+        fft_spec = torch.fft.rfft2(feat_sa, norm='ortho')
         fft_mag = torch.abs(fft_spec)
+        
+        feat_fa = self.fa(feat_sa, fft_mag=fft_mag)
 
-        feat_ca = self.ca(feat_backbone, fft_mag=fft_mag)
-        feat_sa = self.sa(feat_backbone)
-        feat_fa = self.fa(feat_backbone, fft_mag=fft_mag)
-
-        feat_cat = torch.cat([feat_ca, feat_sa, feat_fa], dim=1)
-        feat_fused = self.fusion(feat_cat)
-        feat_final = feat_fused + feat_backbone
+        # Residual Connection
+        feat_final = feat_fa + feat_backbone
 
         out = self.upsampler(feat_final)
         return out
