@@ -1,7 +1,7 @@
-name: GSA-LN_DF2K_x2
+name: GSA-LN_DF2K_x2_Content-Aware
 model_type: SRModel
 scale: 2
-num_gpu: auto
+num_gpu: 1
 manual_seed: 10
 
 datasets:
@@ -14,15 +14,15 @@ datasets:
     io_backend:
       type: disk
 
-    gt_size: 256
+    gt_size: 128
     use_hflip: True
     use_rot: True
 
     # data loader
     use_shuffle: True
-    num_worker_per_gpu: 16
-    batch_size_per_gpu: 16
-    dataset_enlarge_ratio: 2
+    num_worker_per_gpu: 4
+    batch_size_per_gpu: 4
+    dataset_enlarge_ratio: 10
     prefetch_mode: cuda
     pin_memory: true
 
@@ -41,13 +41,9 @@ network_g:
   num_in_ch: 3
   num_out_ch: 3
   num_feat: 64
-  num_blocks: 32
+  num_blocks: 16
   upscale: 2
   freq_mb: True
-  low_thr: 0.33
-  mid_thr: 0.66
-  mask_order: 'natural'
-  shift_mag: False
 
 path:
   pretrain_network_g: ~
@@ -58,6 +54,7 @@ train:
   optim_g:
     type: Adam
     lr: !!float 2e-4
+  g_grad_clip: 10
   total_iter: 500000
   warmup_iter: 5000
   scheduler:
