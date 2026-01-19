@@ -96,26 +96,43 @@ class SpatialAttention(nn.Module):
     def __init__(self, num_feat=64, kernel_size=7, deformable_groups=1):
         super().__init__()
         padding = (kernel_size - 1) // 2
+        
+        # Proyeksi fitur input
         self.proj = nn.Conv2d(num_feat, num_feat, 1, 1, 0)
+        
+        # Proyeksi Offset DCN
+        # Output channel offset biasanya: deformable_groups * 2 * kernel_size * kernel_size
+        # Tapi DCNv2Pack often handles channel matching internally or expects explicit mismatch handling.
+        # Kita asumsikan implementasi DCNv2Pack Anda fleksibel, tapi Zero Init adalah WAJIB.
         self.offset_proj = nn.Conv2d(2, num_feat, 1, 1, 0)
-        self.dcn = DCNv2Pack(num_feat, 1, kernel_size, stride=1, padding=padding, deformable_groups=deformable_groups)
-        self.sigmoid = nn.Sigmoid()
+        
+        self.dcn = DCNv2Pack(num_feat, num_feat, kernel_size, stride=1, padding=padding, deformable_groups=deformable_groups)
+        
+        # --- FIX: ZERO INITIALIZATION ---
+        self._init_offset()
+
+    def _init_offset(self):
+        # Inisialisasi offset dan bias menjadi 0 agar DCN stabil di awal
+        self.offset_proj.weight.data.zero_()
+        self.offset_proj.bias.data.zero_()
 
     def forward(self, x):
-        """Compute spatial attention mask and modulate features.
-
-        Args:
-            x (Tensor): Feature map (B, C, H, W).
-
-        Returns:
-            Tensor: Modulated feature map (B, C, H, W).
+        """
+        DCN Spatial Attention.
+        Output: Aligned Features (Raw), bukan Mask.
         """
         avg_out = torch.mean(x, dim=1, keepdim=True)
         max_out, _ = torch.max(x, dim=1, keepdim=True)
         x_cat = torch.cat([avg_out, max_out], dim=1)
-        att = self.dcn(self.proj(x), self.offset_proj(x_cat))
-        att = self.sigmoid(att)
-        return x * att
+        
+        # Prediksi seberapa jauh piksel harus geser
+        offset = self.offset_proj(x_cat)
+        
+        # Lakukan Deformable Conv
+        # Output adalah fitur yang sudah "diluruskan"
+        feat_aligned = self.dcn(self.proj(x), offset)
+        
+        return feat_aligned
 
 
 class FrequencyAttention(nn.Module):
@@ -149,23 +166,49 @@ class FrequencyAttention(nn.Module):
         m = torch.clamp(m, -1.0, 1.0)
         return x * (1 + self.scale * m)
 
+class FourierFeatureMapping(nn.Module):
+    """Fourier Feature Mapping for high-frequency coordinate encoding."""
+    def __init__(self, input_dim=2, mapping_size=64, scale=10):
+        super().__init__()
+        self.B = nn.Parameter(torch.randn(input_dim, mapping_size) * scale, requires_grad=False)
+
+    def forward(self, x):
+        # x: (..., 2)
+        x_proj = (2 * torch.pi * x) @ self.B
+        return torch.cat([torch.sin(x_proj), torch.cos(x_proj)], dim=-1)
+
+
 class FrequencyAttentionLearnable(nn.Module):
     """
-    Frequency Attention with Adaptive Mask (Learnable).
-    
-    Instead of using rigid thresholds and circular shapes,
-    this module uses a small MLP to predict frequency masks
-    based on coordinates (u, v).
+    Frequency Attention with Top-Tier Upgrades (Hybrid Option 1 + Option 3):
+    1. Fourier Feature Mapping (Positional Encoding) - for sharp mask boundaries.
+    2. Content-Aware Gating (Dynamic Context) - for image-adaptive masking.
     """
-    def __init__(self, num_feat, hidden_dim=32):
+    def __init__(self, num_feat, hidden_dim=64):
         super().__init__()
         self.scale = nn.Parameter(torch.ones(1))
         
-        # Mask Predictor MLP: Input (x, y) -> Output (Low, Mid, High probabilities)
+        # --- 1. Fourier Feature Mapping ---
+        self.pos_enc_dim = hidden_dim 
+        self.pos_encoder = FourierFeatureMapping(input_dim=2, mapping_size=self.pos_enc_dim // 2, scale=10)
+        
+        # --- 2. Context Encoder (Content-Aware) ---
+        self.context_pool = nn.AdaptiveAvgPool2d(1)
+        self.context_mlp = nn.Sequential(
+            nn.Linear(num_feat, hidden_dim),
+            nn.ReLU(inplace=True)
+        )
+        
+        # --- 3. Mask Predictor ---
+        # Input: EncodedCoords + Context
+        total_input_dim = self.pos_enc_dim + hidden_dim
+        
         self.mask_predictor = nn.Sequential(
-            nn.Linear(2, hidden_dim),
+            nn.Linear(total_input_dim, hidden_dim * 2),
             nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim, 3) # 3 bands: Low, Mid, High
+            nn.Linear(hidden_dim * 2, hidden_dim * 2),
+            nn.ReLU(inplace=True),
+            nn.Linear(hidden_dim * 2, 3) 
         )
         
         # Feature MLP
@@ -178,47 +221,51 @@ class FrequencyAttentionLearnable(nn.Module):
         self.ln3 = nn.LayerNorm(3)
 
     def _get_coord_grid(self, h, w, device, dtype):
-        # Create normalized coordinate grid [-1, 1]
-        # For rfft2, X axis is only [0, 1] because half spectrum
         y = torch.linspace(-1, 1, h, device=device, dtype=dtype)
         x = torch.linspace(0, 1, w, device=device, dtype=dtype)
         grid_y, grid_x = torch.meshgrid(y, x, indexing='ij')
-        return torch.stack([grid_x, grid_y], dim=-1) # Shape: (H, W, 2)
+        return torch.stack([grid_x, grid_y], dim=-1)
 
     def forward(self, x, fft_mag=None):
         b, c, h, w = x.shape
         
-        # 1. Compute FFT Magnitude (if not provided)
         if fft_mag is None:
              spec = torch.fft.rfft2(x, norm='ortho')
              fft_mag = torch.abs(spec)
         
         mag = fft_mag
-        h_spec, w_spec = mag.shape[-2], mag.shape[-1] # w_spec is usually w//2 + 1
+        h_spec, w_spec = mag.shape[-2], mag.shape[-1]
 
-        # 2. Generate Masks Dynamically
-        # Coordinate grid
+        # 1. Get Coordinates & Apply Fourier Mapping
         coords = self._get_coord_grid(h_spec, w_spec, x.device, mag.dtype)
+        coords_enc = self.pos_encoder(coords) # (H, W, pos_enc_dim)
         
-        # Predict mask weights for each frequency pixel
-        # Output: (H_spec, W_spec, 3) -> Softmax so total probability = 1
-        mask_weights = self.mask_predictor(coords) 
-        mask_weights = F.softmax(mask_weights, dim=-1) # Last dim: [Low, Mid, High]
+        # 2. Get Image Context
+        ctx = self.context_pool(x).view(b, -1)      
+        ctx = self.context_mlp(ctx)                 # (B, hidden_dim)
+        
+        # 3. Combine (Dynamic Masking)
+        coords_expanded = coords_enc.unsqueeze(0).expand(b, -1, -1, -1)
+        ctx_expanded = ctx.view(b, 1, 1, -1).expand(-1, h_spec, w_spec, -1)
+        mlp_input = torch.cat([coords_expanded, ctx_expanded], dim=-1)
+        
+        # 4. Predict Masks
+        mask_weights = self.mask_predictor(mlp_input) # (B, H, W, 3)
+        mask_weights = F.softmax(mask_weights, dim=-1)
 
-        # Separate into 3 physical masks
-        # Permute so channel is first for broadcasting: (3, 1, 1, H, W)
-        masks = mask_weights.permute(2, 0, 1).unsqueeze(1).unsqueeze(1) 
+        # 5. Extract specific masks
+        # (B, H, W, 3) -> (3, B, 1, H, W)
+        masks = mask_weights.permute(3, 0, 1, 2).unsqueeze(2)
         low_mask = masks[0]
         mid_mask = masks[1]
         high_mask = masks[2]
 
-        # 3. Weighted Pooling (Soft Masking)
-        # Using sum(mag * soft_mask) / sum(soft_mask) for weighted average
+        # 6. Weighted Pooling
         low_mean = (mag * low_mask).sum(dim=(-2, -1)) / (low_mask.sum(dim=(-2, -1)) + 1e-6)
         mid_mean = (mag * mid_mask).sum(dim=(-2, -1)) / (mid_mask.sum(dim=(-2, -1)) + 1e-6)
         high_mean = (mag * high_mask).sum(dim=(-2, -1)) / (high_mask.sum(dim=(-2, -1)) + 1e-6)
 
-        # 4. Attention Generation
+        # 7. Attention Generation
         desc = torch.stack([low_mean, mid_mean, high_mean], dim=-1)
         desc = torch.log1p(desc)
         desc = self.ln3(desc)
