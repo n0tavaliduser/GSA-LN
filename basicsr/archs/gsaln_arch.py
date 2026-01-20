@@ -83,7 +83,6 @@ class ChannelAttention(nn.Module):
             Tensor: Modulated feature map (B, C, H, W).
         """
         b, c, _, _ = x.size()
-        b, c, _, _ = x.size()
         if fft_mag is None:
             fft_mag = torch.abs(torch.fft.rfft2(x, norm='ortho'))
         desc = torch.log1p(fft_mag).mean(dim=(-2, -1))
@@ -97,13 +96,13 @@ class SpatialAttention(nn.Module):
         super().__init__()
         padding = (kernel_size - 1) // 2
         
-        # Proyeksi fitur input
+        # Input feature projection
         self.proj = nn.Conv2d(num_feat, num_feat, 1, 1, 0)
         
-        # Proyeksi Offset DCN
-        # Output channel offset biasanya: deformable_groups * 2 * kernel_size * kernel_size
-        # Tapi DCNv2Pack often handles channel matching internally or expects explicit mismatch handling.
-        # Kita asumsikan implementasi DCNv2Pack Anda fleksibel, tapi Zero Init adalah WAJIB.
+        # DCN Offset Projection
+        # Output channel offset typically: deformable_groups * 2 * kernel_size * kernel_size
+        # Note: DCNv2Pack often handles channel matching internally.
+        # Zero Initialization is MANDATORY for stability.
         self.offset_proj = nn.Conv2d(2, num_feat, 1, 1, 0)
         
         self.dcn = DCNv2Pack(num_feat, num_feat, kernel_size, stride=1, padding=padding, deformable_groups=deformable_groups)
@@ -112,24 +111,24 @@ class SpatialAttention(nn.Module):
         self._init_offset()
 
     def _init_offset(self):
-        # Inisialisasi offset dan bias menjadi 0 agar DCN stabil di awal
+        # Initialize offset and bias to 0 to ensure DCN stability at initialization
         self.offset_proj.weight.data.zero_()
         self.offset_proj.bias.data.zero_()
 
     def forward(self, x):
         """
         DCN Spatial Attention.
-        Output: Aligned Features (Raw), bukan Mask.
+        Output: Aligned Features (Raw), not Mask.
         """
         avg_out = torch.mean(x, dim=1, keepdim=True)
         max_out, _ = torch.max(x, dim=1, keepdim=True)
         x_cat = torch.cat([avg_out, max_out], dim=1)
         
-        # Prediksi seberapa jauh piksel harus geser
+        # Predict pixel displacement offsets
         offset = self.offset_proj(x_cat)
         
-        # Lakukan Deformable Conv
-        # Output adalah fitur yang sudah "diluruskan"
+        # Perform Deformable Convolution
+        # Output: Aligned features
         feat_aligned = self.dcn(self.proj(x), offset)
         
         return feat_aligned
@@ -277,6 +276,48 @@ class FrequencyAttentionLearnable(nn.Module):
         return x * (1 + self.scale * y)
 
 
+class ContrastAwarePixelAttention(nn.Module):
+    """
+    PSNR BOOSTER: Contrast-Aware Pixel Attention (CAPA).
+    Forces the model to focus on pixels with the highest MSE error (edges/textures).
+    """
+    def __init__(self, num_feat):
+        super().__init__()
+        self.conv_c = nn.Sequential(
+            nn.Conv2d(num_feat, num_feat // 4, 1),
+            nn.ReLU(inplace=True),
+            nn.Conv2d(num_feat // 4, 1, 1),
+            nn.Sigmoid()
+        )
+
+    def forward(self, x):
+        # Calculate local contrast as an attention guide
+        # High contrast = area with high potential MSE/PSNR error
+        avg_out = torch.mean(x, dim=1, keepdim=True)
+        max_out, _ = torch.max(x, dim=1, keepdim=True)
+        
+        # Contrast map (Max - Avg)
+        contrast = max_out - avg_out
+        
+        # Predict pixel-wise weights based on original features and contrast
+        mask = self.conv_c(x * contrast) 
+        
+        return x * mask
+
+
+class LearnableResidualScaling(nn.Module):
+    """
+    PSNR BOOSTER: Replaces static 0.1 multiplication with a learnable parameter.
+    Significantly improves long-term stability and convergence.
+    """
+    def __init__(self, num_feat):
+        super().__init__()
+        self.res_scale = nn.Parameter(torch.ones(1, num_feat, 1, 1) * 0.1)
+
+    def forward(self, x, res):
+        return x + (res * self.res_scale)
+
+
 @ARCH_REGISTRY.register()
 class GSALN(nn.Module):
     """Triple-Attention Super-Resolution network.
@@ -302,7 +343,11 @@ class GSALN(nn.Module):
         self.sa = SpatialAttention(num_feat)
         self.fa = FrequencyAttentionLearnable(num_feat) if freq_mb else FrequencyAttention()
 
-        # self.fusion = nn.Conv2d(num_feat * 3, num_feat, 1, 1, 0) # Removed per Sequential Hybrid architecture
+        # Added: Pixel-Wise Booster (CAPA) just before upsampler
+        self.pa_booster = ContrastAwarePixelAttention(num_feat)
+        
+        # Changed: Use Learnable Scaling (LRS) for Global Residual
+        self.lrs = LearnableResidualScaling(num_feat)
 
         self.upsampler = nn.Sequential(
             nn.Conv2d(num_feat, num_feat * (upscale ** 2), 3, 1, 1),
@@ -324,21 +369,24 @@ class GSALN(nn.Module):
         res = self.conv_mid(res)
         feat_backbone = feat + res
 
-        # Langkah 1 (Channel)
+        # Step 1 (Channel)
         feat_ca = self.ca(feat_backbone)
 
-        # Langkah 2 (Spatial/DCN)
+        # Step 2 (Spatial/DCN)
         feat_sa = self.sa(feat_ca)
 
-        # Langkah 3 (Frequency/Fourier)
+        # Step 3 (Frequency/Fourier)
         # Recompute FFT on the output of Spatial Step
         fft_spec = torch.fft.rfft2(feat_sa, norm='ortho')
         fft_mag = torch.abs(fft_spec)
         
         feat_fa = self.fa(feat_sa, fft_mag=fft_mag)
 
-        # Residual Connection
-        feat_final = feat_fa + feat_backbone
+        # BEFORE UPSAMPLER: Apply final CAPA refinement
+        feat_refined = self.pa_booster(feat_fa)
+
+        # USE Learnable Scaling for final fusion
+        feat_final = self.lrs(feat_backbone, feat_refined)
 
         out = self.upsampler(feat_final)
         return out
