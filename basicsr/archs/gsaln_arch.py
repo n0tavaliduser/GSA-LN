@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from basicsr.utils.registry import ARCH_REGISTRY
-from basicsr.archs.arch_util import DCNv2Pack
 
 
 class ResidualBlock(nn.Module):
@@ -91,47 +90,34 @@ class ChannelAttention(nn.Module):
         return x * y
 
 
-class SpatialAttention(nn.Module):
-    def __init__(self, num_feat=64, kernel_size=7, deformable_groups=1):
+class LKA(nn.Module):
+    """
+    Large Kernel Attention (LKA) - Cheat Code #1.
+    Provides Global Context (Long-Range Dependencies) with negligible cost.
+    Decomposes large kernel convolution into:
+    1. Depth-wise Conv (Local)
+    2. Depth-wise Dilated Conv (Global)
+    3. Point-wise Conv (Fusion)
+    """
+    def __init__(self, dim):
         super().__init__()
-        padding = (kernel_size - 1) // 2
-        
-        # Input feature projection
-        self.proj = nn.Conv2d(num_feat, num_feat, 1, 1, 0)
-        
-        # DCN Offset Projection
-        # Output channel offset typically: deformable_groups * 2 * kernel_size * kernel_size
-        # Note: DCNv2Pack often handles channel matching internally.
-        # Zero Initialization is MANDATORY for stability.
-        self.offset_proj = nn.Conv2d(2, num_feat, 1, 1, 0)
-        
-        self.dcn = DCNv2Pack(num_feat, num_feat, kernel_size, stride=1, padding=padding, deformable_groups=deformable_groups)
-        
-        # --- FIX: ZERO INITIALIZATION ---
-        self._init_offset()
-
-    def _init_offset(self):
-        # Initialize offset and bias to 0 to ensure DCN stability at initialization
-        self.offset_proj.weight.data.zero_()
-        self.offset_proj.bias.data.zero_()
+        # 1. Local context (5x5)
+        self.conv0 = nn.Conv2d(dim, dim, 5, padding=2, groups=dim)
+        # 2. Global context (Large Receptive Field approx 21x21 via Dilation)
+        self.conv_spatial = nn.Conv2d(dim, dim, 7, stride=1, padding=9, groups=dim, dilation=3)
+        # 3. Channel Fusion (1x1)
+        self.conv1 = nn.Conv2d(dim, dim, 1)
+        # Optimization: Add Non-linearity
+        self.act = nn.GELU()
 
     def forward(self, x):
-        """
-        DCN Spatial Attention.
-        Output: Aligned Features (Raw), not Mask.
-        """
-        avg_out = torch.mean(x, dim=1, keepdim=True)
-        max_out, _ = torch.max(x, dim=1, keepdim=True)
-        x_cat = torch.cat([avg_out, max_out], dim=1)
-        
-        # Predict pixel displacement offsets
-        offset = self.offset_proj(x_cat)
-        
-        # Perform Deformable Convolution
-        # Output: Aligned features
-        feat_aligned = self.dcn(self.proj(x), offset)
-        
-        return feat_aligned
+        u = x.clone()
+        attn = self.conv0(x)
+        attn = self.act(attn)
+        attn = self.conv_spatial(attn)
+        attn = self.act(attn)
+        attn = self.conv1(attn)
+        return u * attn
 
 
 class FrequencyAttention(nn.Module):
@@ -340,7 +326,7 @@ class GSALN(nn.Module):
         self.conv_mid = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
 
         self.ca = ChannelAttention(num_feat)
-        self.sa = SpatialAttention(num_feat)
+        self.sa = LKA(num_feat)
         self.fa = FrequencyAttentionLearnable(num_feat) if freq_mb else FrequencyAttention()
 
         # Added: Pixel-Wise Booster (CAPA) just before upsampler
@@ -372,7 +358,7 @@ class GSALN(nn.Module):
         # Step 1 (Channel)
         feat_ca = self.ca(feat_backbone)
 
-        # Step 2 (Spatial/DCN)
+        # Step 2 (Spatial/LKA)
         feat_sa = self.sa(feat_ca)
 
         # Step 3 (Frequency/Fourier)
@@ -395,7 +381,7 @@ class GSALN(nn.Module):
 This module defines the building blocks used by GSALN:
 - ResidualBlock: EDSR-style residual block (no batchnorm)
 - ChannelAttention: Frequency Channel Attention (FCA-FFT) for per-channel gating
-- SpatialAttention: Deformed Spatial Attention (DSA) using DCNv2Pack
+- LKA: Large Kernel Attention (Cheat Code #1) for global context
 - FrequencyAttention: Simple frequency magnitude modulation
 - GSALN: Super-resolution network composed of the above modules
 """
