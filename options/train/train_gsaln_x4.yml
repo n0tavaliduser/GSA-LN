@@ -14,15 +14,15 @@ datasets:
     io_backend:
       type: disk
 
-    gt_size: 512
+    gt_size: 384
     use_hflip: True
     use_rot: True
 
     # data loader
     use_shuffle: True
     num_worker_per_gpu: 16
-    batch_size_per_gpu: 16
-    dataset_enlarge_ratio: 2
+    batch_size_per_gpu: 32
+    dataset_enlarge_ratio: 1
     prefetch_mode: cuda
     pin_memory: true
 
@@ -44,10 +44,6 @@ network_g:
   num_blocks: 32
   upscale: 4
   freq_mb: True
-  low_thr: 0.33
-  mid_thr: 0.66
-  mask_order: 'natural'
-  shift_mag: False
 
 path:
   pretrain_network_g: ~
@@ -58,12 +54,12 @@ train:
   optim_g:
     type: Adam
     lr: !!float 2e-4
-  total_iter: 500000
+  total_iter: 600000
   warmup_iter: 5000
   scheduler:
     type: CosineAnnealingRestartLR
-    periods: [250000, 250000]
-    restart_weights: [1, 1]
+    periods: [200000, 200000, 200000]
+    restart_weights: [1, 0.75, 0.5]
     eta_min: !!float 1e-7
   pixel_opt:
     type: L1Loss
@@ -88,5 +84,5 @@ logger:
   save_checkpoint_freq: 5000
   use_tb_logger: True
   wandb:
-    project: ~
+    project: "GSALN_PRODUCTION_x4"
     resume_id: ~

@@ -1,6 +1,6 @@
-name: GSA-LN_DF2K_x3
+name: GSALN_x2
 model_type: SRModel
-scale: 3
+scale: 2
 num_gpu: auto
 manual_seed: 10
 
@@ -9,20 +9,20 @@ datasets:
     name: DF2K
     type: PairedImageDataset
     dataroot_gt: ./datasets/DF2K/HR
-    dataroot_lq: ./datasets/DF2K/LR_bicubic/X3
-    filename_tmpl: '{}x3'
+    dataroot_lq: ./datasets/DF2K/LR_bicubic/X2
+    filename_tmpl: '{}x2'
     io_backend:
       type: disk
 
-    gt_size: 384
+    gt_size: 192
     use_hflip: True
     use_rot: True
 
     # data loader
     use_shuffle: True
-    num_worker_per_gpu: 16
-    batch_size_per_gpu: 16
-    dataset_enlarge_ratio: 2
+    num_worker_per_gpu: 12
+    batch_size_per_gpu: 32
+    dataset_enlarge_ratio: 1
     prefetch_mode: cuda
     pin_memory: true
 
@@ -31,8 +31,8 @@ datasets:
     name: Set5
     type: PairedImageDataset
     dataroot_gt: datasets/benchmark/Set5/HR
-    dataroot_lq: datasets/benchmark/Set5/LR_bicubic/X3
-    filename_tmpl: '{}x3'
+    dataroot_lq: datasets/benchmark/Set5/LR_bicubic/X2
+    filename_tmpl: '{}x2'
     io_backend:
       type: disk
 
@@ -42,28 +42,24 @@ network_g:
   num_out_ch: 3
   num_feat: 64
   num_blocks: 32
-  upscale: 3
+  upscale: 2
   freq_mb: True
-  low_thr: 0.33
-  mid_thr: 0.66
-  mask_order: 'natural'
-  shift_mag: False
 
 path:
-  pretrain_network_g: ~
+  pretrain_network_g: experiments/GSALN_x2/models/net_g_40000.pth
   strict_load_g: True
-  resume_state: ~
+  resume_state: experiments/GSALN_x2/training_states/40000.state
 
 train:
   optim_g:
     type: Adam
     lr: !!float 2e-4
-  total_iter: 500000
+  total_iter: 600000
   warmup_iter: 5000
   scheduler:
     type: CosineAnnealingRestartLR
-    periods: [250000, 250000]
-    restart_weights: [1, 1]
+    periods: [200000, 200000, 200000]
+    restart_weights: [1, 0.75, 0.5]
     eta_min: !!float 1e-7
   pixel_opt:
     type: L1Loss
@@ -76,11 +72,11 @@ val:
   metrics:
     psnr:
       type: calculate_psnr
-      crop_border: 3
+      crop_border: 2
       test_y_channel: True
     ssim:
       type: calculate_ssim
-      crop_border: 3
+      crop_border: 2
       test_y_channel: True
 
 logger:
@@ -88,5 +84,5 @@ logger:
   save_checkpoint_freq: 5000
   use_tb_logger: True
   wandb:
-    project: ~
+    project: "GSALN_PRODUCTION_x2"
     resume_id: ~
