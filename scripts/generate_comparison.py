@@ -199,10 +199,10 @@ def main():
     other_models_config = [
         # {'name': 'ESRGAN', 'path': f'models/ESRGAN_x{scale}.pth', 'arch': RRDBNet, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'scale': scale, 'num_feat': 64, 'num_block': 23}},
         # {'name': 'SwinIR', 'path': f'models/SwinIR_x{scale}.pth', 'arch': SwinIR, 'window_size': 8, 'args': {'upscale': scale, 'in_chans': 3, 'img_size': 64, 'window_size': 8, 'img_range': 1., 'depths': [6, 6, 6, 6, 6, 6], 'embed_dim': 180, 'num_heads': [6, 6, 6, 6, 6, 6], 'mlp_ratio': 2, 'upsampler': 'pixelshuffle', 'resi_connection': '1conv'}},
+        {'name': 'VDSR', 'path': 'models/vdsr-TB291-fef487db.pth.tar', 'arch': VDSR, 'uses_bicubic_input': True, 'y_channel_only': True, 'args': {'num_in_ch': 1, 'num_out_ch': 1, 'num_feat': 64, 'num_block': 18}},
         {'name': 'EDSR', 'path': f'models/EDSR_x{scale}.pth', 'arch': EDSR, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_block': 16, 'upscale': scale, 'res_scale': 1.0, 'img_range': 1., 'rgb_mean': (0., 0., 0.)}},
         # {'name': 'RCAN', 'path': f'models/RCAN_x{scale}.pth', 'arch': RCAN, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_group': 10, 'num_block': 20, 'squeeze_factor': 16, 'upscale': scale, 'res_scale': 1.0, 'img_range': 255., 'rgb_mean': (0.4488, 0.4371, 0.4040)}},
         {'name': 'SRCNN', 'path': f'models/SRCNN_x{scale}.pth', 'arch': SRCNN, 'uses_bicubic_input': True, 'y_channel_only': True, 'args': {'num_in_ch': 1, 'num_out_ch': 1, 'num_feat': 64, 'num_feat2': 32}},
-        {'name': 'VDSR', 'path': f'models/VDSR_x{scale}.pth', 'arch': VDSR, 'uses_bicubic_input': True, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_block': 18}},
     ]
     
     # Resolve benchmark base path
@@ -314,6 +314,8 @@ def main():
                         state_dict = state_dict['params_ema']
                     elif 'params' in state_dict:
                         state_dict = state_dict['params']
+                    elif 'state_dict' in state_dict:
+                        state_dict = state_dict['state_dict']
                     
                     # 2. Clean "module." or "model." prefix immediately
                     new_state_dict = OrderedDict()
@@ -412,6 +414,7 @@ def main():
                     
                     # VDSR/SRCNN Mappings (Keep existing logic)
                     if m_name == 'VDSR':
+                        # Case 1: Old keys (conv_1, conv_2_to_19...)
                         if 'conv_1.weight' in state_dict:
                             mapped_dict = OrderedDict()
                             for k, v in state_dict.items():
@@ -430,6 +433,28 @@ def main():
                                         mapped_dict[k] = v
                                 elif k.startswith('conv_20.'):
                                     mapped_dict[k.replace('conv_20.', 'conv_last.')] = v
+                                else:
+                                    mapped_dict[k] = v
+                            state_dict = mapped_dict
+                        
+                        # Case 2: New keys (conv1.0, trunk.X.conv, conv2)
+                        elif 'conv1.0.weight' in state_dict or 'trunk.0.conv.weight' in state_dict:
+                            print("Detected VDSR format: conv1/trunk/conv2")
+                            mapped_dict = OrderedDict()
+                            for k, v in state_dict.items():
+                                if k.startswith('conv1.0.'):
+                                    mapped_dict[k.replace('conv1.0.', 'conv_first.')] = v
+                                elif k.startswith('conv2.'):
+                                    mapped_dict[k.replace('conv2.', 'conv_last.')] = v
+                                elif k.startswith('trunk.'):
+                                    # Format: trunk.X.conv.weight -> body.{2*X}.weight
+                                    parts = k.split('.')
+                                    if len(parts) >= 4 and parts[2] == 'conv':
+                                        idx = int(parts[1])
+                                        suffix = parts[3] # weight or bias
+                                        new_idx = idx * 2
+                                        new_k = f'body.{new_idx}.{suffix}'
+                                        mapped_dict[new_k] = v
                                 else:
                                     mapped_dict[k] = v
                             state_dict = mapped_dict
@@ -473,10 +498,13 @@ def main():
                             y_channel = img_ycbcr[:, :, 0:1].astype(np.float32) / 255.0
                             
                             # Run inference on Y channel only
-                            y_tensor = torch.from_numpy(y_channel.transpose(2, 0, 1)).unsqueeze(0).to(device)
+                            # VDSR often expects 0-255 input range
+                            y_tensor = torch.from_numpy(y_channel.transpose(2, 0, 1)).float().unsqueeze(0).to(device) * 255.0
                             with torch.no_grad():
                                 y_sr = model_other(y_tensor)
-                            y_sr = y_sr.squeeze(0).cpu().numpy().transpose(1, 2, 0)
+                            
+                            # Output is residual + input (0-255 range). Convert back to 0-1.
+                            y_sr = y_sr.squeeze(0).cpu().numpy().transpose(1, 2, 0) / 255.0
                             y_sr = np.clip(y_sr * 255.0, 0, 255).astype(np.uint8)
                             
                             # Combine SR Y with bicubic CbCr
