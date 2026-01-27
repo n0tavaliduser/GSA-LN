@@ -64,7 +64,7 @@ network_g:
   freq_mb: True
 
 path:
-  pretrain_network_g: experiments/GSA-LN_DF2K_x3/models/net_g_latest.pth
+  pretrain_network_g: experiments/GSALN_x3/models/net_g_570000.pth
   strict_load_g: True
   resume_state: ~
 

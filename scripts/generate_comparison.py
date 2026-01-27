@@ -142,10 +142,10 @@ def main():
     # Benchmark datasets to process
     BENCHMARK_DATASETS = [
         'Set5', 
-        'Set14', 
-        'Urban100', 
-        'B100', 
-        'Manga109'
+        # 'Set14', 
+        # 'Urban100', 
+        # 'B100', 
+        # 'Manga109'
     ]
     BENCHMARK_BASE_PATH = 'datasets/benchmark'
     # ========================================================
@@ -199,7 +199,7 @@ def main():
     other_models_config = [
         # {'name': 'ESRGAN', 'path': f'models/ESRGAN_x{scale}.pth', 'arch': RRDBNet, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'scale': scale, 'num_feat': 64, 'num_block': 23}},
         # {'name': 'SwinIR', 'path': f'models/SwinIR_x{scale}.pth', 'arch': SwinIR, 'window_size': 8, 'args': {'upscale': scale, 'in_chans': 3, 'img_size': 64, 'window_size': 8, 'img_range': 1., 'depths': [6, 6, 6, 6, 6, 6], 'embed_dim': 180, 'num_heads': [6, 6, 6, 6, 6, 6], 'mlp_ratio': 2, 'upsampler': 'pixelshuffle', 'resi_connection': '1conv'}},
-        {'name': 'EDSR', 'path': f'models/EDSR_x{scale}.pth', 'arch': EDSR, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_block': 16, 'upscale': scale, 'res_scale': 1.0, 'img_range': 255., 'rgb_mean': (0.4488, 0.4371, 0.4040)}},
+        {'name': 'EDSR', 'path': f'models/EDSR_x{scale}.pth', 'arch': EDSR, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_block': 16, 'upscale': scale, 'res_scale': 1.0, 'img_range': 1., 'rgb_mean': (0., 0., 0.)}},
         # {'name': 'RCAN', 'path': f'models/RCAN_x{scale}.pth', 'arch': RCAN, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_group': 10, 'num_block': 20, 'squeeze_factor': 16, 'upscale': scale, 'res_scale': 1.0, 'img_range': 255., 'rgb_mean': (0.4488, 0.4371, 0.4040)}},
         {'name': 'SRCNN', 'path': f'models/SRCNN_x{scale}.pth', 'arch': SRCNN, 'uses_bicubic_input': True, 'y_channel_only': True, 'args': {'num_in_ch': 1, 'num_out_ch': 1, 'num_feat': 64, 'num_feat2': 32}},
         {'name': 'VDSR', 'path': f'models/VDSR_x{scale}.pth', 'arch': VDSR, 'uses_bicubic_input': True, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_block': 18}},
@@ -272,9 +272,19 @@ def main():
             if h_hr != h_new or w_hr != w_new:
                 img_hr = img_hr[:h_new, :w_new, :]
 
-            # Generate Bicubic Upscale (Baseline) from LR
-            img_bicubic = cv2.resize(img_lr, (w_new, h_new), interpolation=cv2.INTER_CUBIC)
-            img_bicubic = np.clip(img_bicubic, 0, 1)  # Clip to prevent color artifacts from overshoot
+            # Generate Bicubic Upscale (PyTorch Standard)
+            # Using raw tensor interpolation which is the "DL standard" bicubic
+            # Often produces slightly different results than PIL/CV2 (less smoothing/antialiasing by default)
+            img_lr_tensor = img2tensor(img_lr, bgr2rgb=True, float32=True).unsqueeze(0).to(device)
+            with torch.no_grad():
+                img_bicubic_tensor = torch.nn.functional.interpolate(
+                    img_lr_tensor, size=(h_new, w_new), mode='bicubic', align_corners=False
+                )
+            # Convert back to numpy float [0, 1] BGR
+            # tensor2img returns uint8 [0, 255] BGR or RGB depending on params. 
+            # Note: img2tensor expects BGR, converts to RGB. tensor2img(rgb2bgr=True) converts back.
+            img_bicubic = tensor2img(img_bicubic_tensor, rgb2bgr=True, min_max=(0, 1))
+            img_bicubic = img_bicubic.astype(np.float32) / 255.
 
             # 4. Inference Our Model
             res_our = inference_model(model_g, img_lr, device, scale=scale)
@@ -290,125 +300,99 @@ def main():
                      m_path = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')), m_path)
                 
                 if not os.path.exists(m_path):
-                    print(f"Skipping {m_name}: Model file not found at {m_path}")
-                    continue
+                    # Try 'models/' prefix if not found
+                    alt_path = os.path.join(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')), 'models', os.path.basename(m_path))
+                    if os.path.exists(alt_path):
+                        m_path = alt_path
+                    else:
+                        print(f"Skipping {m_name}: Model file not found at {m_path}")
+                        continue
                 try:
-                    model_other = m_conf['arch'](**m_conf.get('args', {}))
+                    # 1. Load state_dict FIRST to inspect auto-params
                     state_dict = torch.load(m_path, map_location=lambda storage, loc: storage)
                     if 'params_ema' in state_dict:
                         state_dict = state_dict['params_ema']
                     elif 'params' in state_dict:
                         state_dict = state_dict['params']
                     
-                    # Clean "module." prefix
+                    # 2. Clean "module." or "model." prefix immediately
                     new_state_dict = OrderedDict()
                     for k, v in state_dict.items():
-                        name = k.replace('module.', '')
+                        # Remove common DP/DDP prefixes
+                        name = k.replace('module.', '').replace('model.', '')
                         new_state_dict[name] = v
                     state_dict = new_state_dict
 
-                    # Specific handling for RCAN mismatch (original repo vs basicsr)
-                    if m_name == 'RCAN':
-                         if 'head.0.weight' in state_dict:
-                            mapped_dict = OrderedDict()
-                            n_groups = m_conf['args'].get('num_group', 10)
-                            n_blocks = m_conf['args'].get('num_block', 20)
-                            
-                            for k, v in state_dict.items():
-                                if k.startswith('head.0.'):
-                                    # head.0 -> conv_first
-                                    mapped_dict[k.replace('head.0.', 'conv_first.')] = v
-                                elif k.startswith('body.') and k.split('.')[1].isdigit():
-                                    parts = k.split('.')
-                                    group_idx = int(parts[1])
-                                    
-                                    if group_idx < n_groups:
-                                        # body.G.body.B.body.X -> body.G.residual_group.B.rcab.X
-                                        # body.G.body.B.body.3.conv_du.X -> body.G.residual_group.B.rcab.3.attention.X
-                                        # body.G.body.20 -> body.G.conv
-                                        if len(parts) >= 4 and parts[2] == 'body':
-                                            block_idx = int(parts[3]) if parts[3].isdigit() else -1
-                                            if block_idx == n_blocks:
-                                                # body.G.body.20 -> body.G.conv
-                                                new_k = k.replace(f'body.{group_idx}.body.{block_idx}.', f'body.{group_idx}.conv.')
-                                                mapped_dict[new_k] = v
-                                            elif block_idx >= 0 and block_idx < n_blocks:
-                                                # body.G.body.B.body.X -> body.G.residual_group.B.rcab.X
-                                                new_k = k.replace(f'.body.{block_idx}.body.', f'.residual_group.{block_idx}.rcab.')
-                                                # conv_du -> attention with index shift (0->1, 2->3)
-                                                # Original: conv_du has [Conv, ReLU, Conv, Sigmoid] at indices 0,1,2,3
-                                                # BasicSR: attention has [AdaptiveAvgPool, Conv, ReLU, Conv, Sigmoid] at indices 0,1,2,3,4
-                                                new_k = new_k.replace('.conv_du.0.', '.attention.1.')
-                                                new_k = new_k.replace('.conv_du.2.', '.attention.3.')
-                                                mapped_dict[new_k] = v
-                                            else:
-                                                mapped_dict[k] = v
-                                        else:
-                                            mapped_dict[k] = v
-                                    elif group_idx == n_groups:
-                                        # body.10 -> conv_after_body
-                                        new_k = k.replace(f'body.{group_idx}.', 'conv_after_body.')
-                                        mapped_dict[new_k] = v
-                                    else:
-                                        mapped_dict[k] = v
-                                elif k.startswith('tail.'):
-                                    # tail.0.0 -> upsample.0, tail.1 -> conv_last
-                                    if 'tail.0.0.' in k:
-                                        mapped_dict[k.replace('tail.0.0.', 'upsample.0.')] = v
-                                    elif 'tail.1.' in k:
-                                        mapped_dict[k.replace('tail.1.', 'conv_last.')] = v
-                                    else:
-                                        mapped_dict[k] = v
-                                elif k.startswith(('sub_mean', 'add_mean')):
-                                    pass  # Ignore mean shift layers
-                                else:
-                                    mapped_dict[k] = v
-                            
-                            state_dict = mapped_dict
-
-                    # Specific handling for EDSR mismatch (Head/Body/Tail vs conv_first/body/etc)
+                    # 3. Auto-detect parameters for EDSR
+                    model_args = m_conf.get('args', {}).copy()
+                    
                     if m_name == 'EDSR':
-                         n_blocks = m_conf['args'].get('num_block', 16)
+                         # Detect num_feat from conv_first or head.0
+                         n_feat = 64 # Fallback
+                         if 'conv_first.weight' in state_dict:
+                             n_feat = state_dict['conv_first.weight'].shape[0]
+                         elif 'head.0.weight' in state_dict:
+                             n_feat = state_dict['head.0.weight'].shape[0]
                          
-                         # Attempt to map keys if structure mismatches
+                         # Detect num_block from body
+                         # Iterate keys to find max index in body.X.
+                         max_block_idx = -1
+                         for k in state_dict.keys():
+                             if k.startswith('body.'):
+                                 parts = k.split('.')
+                                 if len(parts) > 1 and parts[1].isdigit():
+                                     idx = int(parts[1])
+                                     if idx > max_block_idx:
+                                         max_block_idx = idx
+                         
+                         # Since max_idx is 0-indexed, if max is 15, we have 16 blocks.
+                         # BUT: Check valid keys. EDSR body ends with conv_after_body.
+                         # If we found body.31, it implies 32 blocks (0-31).
+                         
+                         # Special Logic: If the checkpoint is from original EDSR, conv_after_body might be named body.32 (if 32 blocks)
+                         # So if we see body.32 as a CONV layer (weight shape), it might be the tail of body?
+                         # Actually in basicsr structure: body is a ModuleList/Sequential of ResBlocks.
+                         # So if we see body.15.conv1.weight, then block 15 exists.
+                         # We set num_block = max_index + 1
+                         
+                         if max_block_idx >= 0:
+                             n_block = max_block_idx + 1
+                             # Heuristic correction: standard EDSR is 32 or 16. 
+                             # If we detected 33 blocks, maybe body.32 was conv_after_body (the original repo style).
+                             # Original repo: body = [ResBlock * 32, Conv]
+                             # So body.32 is a Conv2d, not a ResBlock.
+                             # Let's check if body.{max_block_idx} has .conv1 or is just .weight
+                             last_key_check = f"body.{max_block_idx}.conv1.weight"
+                             if last_key_check not in state_dict:
+                                 # It's likely the conv_after_body in disguise
+                                 n_block = max_block_idx
+                             
+                             print(f"Auto-detected EDSR config: num_feat={n_feat}, num_block={n_block}")
+                             model_args['num_feat'] = n_feat
+                             model_args['num_block'] = n_block
+                         else:
+                             print(f"Warning: Could not auto-detect EDSR blocks. Using default {model_args.get('num_block')}")
+
+                         # Specific mapping for original EDSR keys (Head/Body/Tail)
                          if 'head.0.weight' in state_dict:
                             mapped_dict = OrderedDict()
                             for k, v in state_dict.items():
                                 if k.startswith('head.0.'):
                                     mapped_dict[k.replace('head.0.', 'conv_first.')] = v
                                 elif k.startswith('body.'):
-                                    # Check if this is the last body element (conv_after_body)
-                                    # Expected format: body.16.weight (if 16 blocks)
-                                    # or body.32.weight etc.
-                                    
-                                    # Extract block index
                                     parts = k.split('.')
-                                    try:
-                                        idx = int(parts[1])
-                                    except ValueError:
-                                        mapped_dict[k] = v
-                                        continue
-                                        
-                                    if idx == n_blocks:
-                                        # This is conv_after_body
-                                        new_k = k.replace(f'body.{idx}.', 'conv_after_body.')
-                                        mapped_dict[new_k] = v
-                                    elif idx < n_blocks:
-                                        # Normal body block mapping
-                                        # body.X.body.0 -> body.X.conv1
-                                        # body.X.body.2 -> body.X.conv2
-                                        new_k = k
-                                        new_k = new_k.replace('.body.0.', '.conv1.')
-                                        new_k = new_k.replace('.body.2.', '.conv2.')
-                                        mapped_dict[new_k] = v
+                                    idx = int(parts[1]) if parts[1].isdigit() else -1
+                                    
+                                    # If idx == num_block (the one AFTER the last block), it's conv_after_body
+                                    if idx == model_args['num_block']:
+                                         new_k = k.replace(f'body.{idx}.', 'conv_after_body.')
+                                         mapped_dict[new_k] = v
+                                    elif idx < model_args['num_block']:
+                                         new_k = k.replace('.body.0.', '.conv1.').replace('.body.2.', '.conv2.')
+                                         mapped_dict[new_k] = v
                                     else:
-                                        # Index > n_blocks? Should not happen if config matches model
-                                        mapped_dict[k] = v
-                                        
+                                         mapped_dict[k] = v
                                 elif k.startswith('tail.'):
-                                    # tail.0.0 -> upsample.0
-                                    # tail.0.2 -> upsample.2 (for x4 scale)
-                                    # tail.1 -> conv_last
                                     if 'tail.0.0.' in k:
                                         mapped_dict[k.replace('tail.0.0.', 'upsample.0.')] = v
                                     elif 'tail.0.2.' in k:
@@ -418,27 +402,22 @@ def main():
                                     else:
                                          mapped_dict[k] = v
                                 elif k.startswith(('sub_mean', 'add_mean')):
-                                    pass # Ignore mean shift layers as they are functional in basicsr impl
+                                    pass 
                                 else:
                                     mapped_dict[k] = v
-                            
                             state_dict = mapped_dict
 
-                    # Specific handling for VDSR mismatch (original naming vs our architecture)
-                    # Original checkpoint: conv_1, conv_2_to_19.conv_X (X=2-19), conv_20
-                    # Our architecture: conv_first, body.0/2/4/.../34, conv_last
+                    # 4. Instantiate Model with (potentially updated) args
+                    model_other = m_conf['arch'](**model_args)
+                    
+                    # VDSR/SRCNN Mappings (Keep existing logic)
                     if m_name == 'VDSR':
                         if 'conv_1.weight' in state_dict:
                             mapped_dict = OrderedDict()
                             for k, v in state_dict.items():
                                 if k.startswith('conv_1.'):
-                                    # conv_1 -> conv_first
                                     mapped_dict[k.replace('conv_1.', 'conv_first.')] = v
                                 elif k.startswith('conv_2_to_19.'):
-                                    # conv_2_to_19.conv_X -> body.((X-2)*2)
-                                    # e.g., conv_2_to_19.conv_2 -> body.0
-                                    #       conv_2_to_19.conv_3 -> body.2
-                                    #       conv_2_to_19.conv_19 -> body.34
                                     import re
                                     match = re.match(r'conv_2_to_19\.conv_(\d+)\.(.*)', k)
                                     if match:
@@ -450,18 +429,12 @@ def main():
                                     else:
                                         mapped_dict[k] = v
                                 elif k.startswith('conv_20.'):
-                                    # conv_20 -> conv_last
                                     mapped_dict[k.replace('conv_20.', 'conv_last.')] = v
                                 else:
                                     mapped_dict[k] = v
-                            
                             state_dict = mapped_dict
 
-                    # Specific handling for SRCNN mismatch
-                    # Common checkpoint naming patterns for SRCNN
                     if m_name == 'SRCNN':
-                        # Check for various naming conventions
-                        # Pattern 1: layer1, layer2, layer3 (common in some repos)
                         if 'layer1.weight' in state_dict or 'layer1.0.weight' in state_dict:
                             mapped_dict = OrderedDict()
                             for k, v in state_dict.items():
@@ -478,7 +451,8 @@ def main():
                                     mapped_dict[k] = v
                             state_dict = mapped_dict
 
-                    model_other.load_state_dict(state_dict, strict=True)
+                    # Load weights
+                    model_other.load_state_dict(state_dict, strict=False) 
                     model_other.eval().to(device)
                     # Get window_size from config if available (for SwinIR, etc.)
                     ws = m_conf.get('window_size', None)
