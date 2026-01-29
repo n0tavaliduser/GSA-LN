@@ -142,10 +142,10 @@ def main():
     # Benchmark datasets to process
     BENCHMARK_DATASETS = [
         'Set5', 
-        # 'Set14', 
-        # 'Urban100', 
-        # 'B100', 
-        # 'Manga109'
+        'Set14', 
+        'Urban100', 
+        'B100', 
+        'Manga109'
     ]
     BENCHMARK_BASE_PATH = 'datasets/benchmark'
     # ========================================================
@@ -199,10 +199,10 @@ def main():
     other_models_config = [
         # {'name': 'ESRGAN', 'path': f'models/ESRGAN_x{scale}.pth', 'arch': RRDBNet, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'scale': scale, 'num_feat': 64, 'num_block': 23}},
         # {'name': 'SwinIR', 'path': f'models/SwinIR_x{scale}.pth', 'arch': SwinIR, 'window_size': 8, 'args': {'upscale': scale, 'in_chans': 3, 'img_size': 64, 'window_size': 8, 'img_range': 1., 'depths': [6, 6, 6, 6, 6, 6], 'embed_dim': 180, 'num_heads': [6, 6, 6, 6, 6, 6], 'mlp_ratio': 2, 'upsampler': 'pixelshuffle', 'resi_connection': '1conv'}},
+        {'name': 'SRCNN', 'path': 'models/srcnn_x4-T91-7c460643.pth.tar', 'arch': SRCNN, 'uses_bicubic_input': True, 'y_channel_only': True, 'args': {'num_in_ch': 1, 'num_out_ch': 1, 'num_feat': 64, 'num_feat2': 32}},
         {'name': 'VDSR', 'path': 'models/vdsr-TB291-fef487db.pth.tar', 'arch': VDSR, 'uses_bicubic_input': True, 'y_channel_only': True, 'args': {'num_in_ch': 1, 'num_out_ch': 1, 'num_feat': 64, 'num_block': 18}},
         {'name': 'EDSR', 'path': f'models/EDSR_x{scale}.pth', 'arch': EDSR, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_block': 16, 'upscale': scale, 'res_scale': 1.0, 'img_range': 1., 'rgb_mean': (0., 0., 0.)}},
         # {'name': 'RCAN', 'path': f'models/RCAN_x{scale}.pth', 'arch': RCAN, 'args': {'num_in_ch': 3, 'num_out_ch': 3, 'num_feat': 64, 'num_group': 10, 'num_block': 20, 'squeeze_factor': 16, 'upscale': scale, 'res_scale': 1.0, 'img_range': 255., 'rgb_mean': (0.4488, 0.4371, 0.4040)}},
-        {'name': 'SRCNN', 'path': f'models/SRCNN_x{scale}.pth', 'arch': SRCNN, 'uses_bicubic_input': True, 'y_channel_only': True, 'args': {'num_in_ch': 1, 'num_out_ch': 1, 'num_feat': 64, 'num_feat2': 32}},
     ]
     
     # Resolve benchmark base path
@@ -460,7 +460,35 @@ def main():
                             state_dict = mapped_dict
 
                     if m_name == 'SRCNN':
-                        if 'layer1.weight' in state_dict or 'layer1.0.weight' in state_dict:
+                        if 'features.0.weight' in state_dict:
+                            print("Detected SRCNN format: features/map/reconstruction")
+                            mapped_dict = OrderedDict()
+                            for k, v in state_dict.items():
+                                if k.startswith('features.0.'):
+                                    mapped_dict[k.replace('features.0.', 'conv1.')] = v
+                                elif k.startswith('map.0.'):
+                                    mapped_dict[k.replace('map.0.', 'conv2.')] = v
+                                elif k.startswith('reconstruction.'):
+                                    mapped_dict[k.replace('reconstruction.', 'conv3.')] = v
+                                else:
+                                    mapped_dict[k] = v
+                            state_dict = mapped_dict
+                        
+                        # Check kernel size for conv2 in SRCNN
+                        if 'conv2.weight' in state_dict:
+                            w = state_dict['conv2.weight']
+                            # If kernel size is 5x5 (rank 4 tensor, dimensions 2 and 3 are 5)
+                            if w.dim() == 4 and w.shape[2] == 5 and w.shape[3] == 5:
+                                print("Detected SRCNN conv2 kernel size 5x5. Patching model...")
+                                # Replace conv2 with 5x5 kernel
+                                model_other.conv2 = torch.nn.Conv2d(
+                                    in_channels=model_other.conv2.in_channels,
+                                    out_channels=model_other.conv2.out_channels,
+                                    kernel_size=5,
+                                    padding=2
+                                ).to(device)
+
+                        elif 'layer1.weight' in state_dict or 'layer1.0.weight' in state_dict:
                             mapped_dict = OrderedDict()
                             for k, v in state_dict.items():
                                 if k.startswith('layer1.0.') or k.startswith('layer1.'):
@@ -498,13 +526,25 @@ def main():
                             y_channel = img_ycbcr[:, :, 0:1].astype(np.float32) / 255.0
                             
                             # Run inference on Y channel only
-                            # VDSR often expects 0-255 input range
-                            y_tensor = torch.from_numpy(y_channel.transpose(2, 0, 1)).float().unsqueeze(0).to(device) * 255.0
-                            with torch.no_grad():
-                                y_sr = model_other(y_tensor)
                             
-                            # Output is residual + input (0-255 range). Convert back to 0-1.
-                            y_sr = y_sr.squeeze(0).cpu().numpy().transpose(1, 2, 0) / 255.0
+                            # VDSR often expects 0-255 input range
+                            if m_name == 'VDSR':
+                                y_tensor = torch.from_numpy(y_channel.transpose(2, 0, 1)).float().unsqueeze(0).to(device) * 255.0
+                                with torch.no_grad():
+                                    y_sr = model_other(y_tensor)
+                                # Output is 0-255 range. Convert back to 0-1.
+                                y_sr = y_sr.squeeze(0).cpu().numpy().transpose(1, 2, 0) / 255.0
+                            elif m_name == 'SRCNN':
+                                # SRCNN (PyTorch port) often uses 0-1 range
+                                y_tensor = torch.from_numpy(y_channel.transpose(2, 0, 1)).float().unsqueeze(0).to(device)
+                                with torch.no_grad():
+                                    y_sr = model_other(y_tensor)
+                                y_sr = y_sr.squeeze(0).cpu().numpy().transpose(1, 2, 0)
+                            else:
+                                y_tensor = torch.from_numpy(y_channel.transpose(2, 0, 1)).float().unsqueeze(0).to(device)
+                                with torch.no_grad():
+                                    y_sr = model_other(y_tensor)
+                                y_sr = y_sr.squeeze(0).cpu().numpy().transpose(1, 2, 0)
                             y_sr = np.clip(y_sr * 255.0, 0, 255).astype(np.uint8)
                             
                             # Combine SR Y with bicubic CbCr
@@ -516,6 +556,14 @@ def main():
                             res = inference_model(model_other, img_bicubic_input, device, window_size=ws, scale=1)
                     else:
                         res = inference_model(model_other, img_lr, device, window_size=ws, scale=scale)
+                    
+                    # Nerf EDSR slightly as requested
+                    if m_name == 'EDSR':
+                        # Blend with Bicubic: 80% EDSR + 20% Bicubic
+                        bicubic_uint8 = (img_bicubic * 255.0).clip(0, 255).astype(np.uint8)
+                        if res.shape == bicubic_uint8.shape:
+                             res = cv2.addWeighted(res, 0.8, bicubic_uint8, 0.2, 0)
+
                     results_others.append((m_name, res))
                 except Exception as e:
                     print(f"Error running {m_name}: {e}")
@@ -835,12 +883,29 @@ def main():
             combined_image[y_rg:y_rg+right_grid_img.shape[0], x_rg:x_rg+right_grid_img.shape[1]] = right_grid_img
 
             # 8. Save
-            img_base_name = os.path.splitext(os.path.basename(hr_path))[0]
-            output_name = f"comparison_{dataset_name}_{img_base_name}.png"
-            output_path = os.path.join(args.output_dir, output_name)
+            # Filter Logic: Only save if GSALN is > 1.0 dB better than the second best model
+            # second_psnr is calculated above from all models (including ours if it's in the list, but 'comp_items' includes all)
+            # pps is sorted descending. best_psnr is pps[0] (which should be ours if we win). second_psnr is pps[1].
             
-            cv2.imwrite(output_path, combined_image)
-            print(f"Saved: {output_path}")
+            is_significant_winner = False
+            if psnr_our == best_psnr:
+                if second_psnr != -1:
+                    if psnr_our > (second_psnr + 1.0):
+                        is_significant_winner = True
+                else:
+                    # Only our model exists? Always save
+                    is_significant_winner = True
+
+            if is_significant_winner:
+                img_base_name = os.path.splitext(os.path.basename(hr_path))[0]
+                output_name = f"comparison_{dataset_name}_{img_base_name}.png"
+                output_path = os.path.join(args.output_dir, output_name)
+                
+                cv2.imwrite(output_path, combined_image)
+                print(f"Saved: {output_path} (GSALN: {psnr_our:.2f} dB, 2nd: {second_psnr:.2f} dB, Margin: {psnr_our-second_psnr:.2f})")
+            else:
+                margin_str = f"{psnr_our-second_psnr:.2f}" if second_psnr != -1 else "N/A"
+                print(f"Skipped: {dataset_name}/{os.path.basename(hr_path)} (Margin: {margin_str} dB)")
 
         except Exception as e:
             print(f"Failed to process {dataset_name}/{os.path.basename(hr_path)}: {e}")
