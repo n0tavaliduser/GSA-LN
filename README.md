@@ -4,9 +4,16 @@ Experimental implementation of the GSA-LN architecture, exploring hybrid spatial
 
 ![GSA-LN Architecture](figs/arch.png)
 
+## Dependencies
+
+Based on `requirements.txt`, the following 3 main dependencies are used:
+- **Python**: version 3.10
+- **PyTorch**: Main deep learning framework (`torch` and `torchvision` dependencies).
+- **Nvidia GPU + CUDA**: Highly recommended for GPU-accelerated computing.
+
 ## Pre-trained Models
 
-Pre-trained models will be available soon.
+You can download the pre-trained models for x2, x3, and x4 scales from [Google Drive](https://drive.google.com/drive/folders/1vvU5jfS7mScbvk8_JOIct8rfXY3VLwPd?usp=sharing).
 
 ## Datasets
 
