@@ -25,6 +25,13 @@ version.py
 *.jpeg
 *.jpg
 *.gif
+
+# Except for images in figs folder needed for README
+!figs/
+!figs/*.png
+!figs/*.jpeg
+!figs/*.jpg
+!figs/*.gif
 *.pth
 *.zip
 *.pt
