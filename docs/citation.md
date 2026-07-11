@@ -1,0 +1,18 @@
+[1]M. Chung and Y. Kim, “Unsupervised Image Super-Resolution for High-Resolution Satellite Imagery via Omnidirectional Real-to-Synthetic Domain Translation,” IEEE J Sel Top Appl Earth Obs Remote Sens, vol. 18, pp. 4427–4445, 2025, doi: 10.1109/JSTARS.2025.3530959.
+[2]M. Su, X. Li, J. Xu, M. Yang, and C. Zhang, “Feature Preserving and Enhancing Network for Image Super-Resolution,” IEEE Access, vol. 11, pp. 132867–132877, 2023, doi: 10.1109/ACCESS.2023.3335382.
+[3]K. Karwowska and D. Wierzbicki, “MCWESRGAN: Improving Enhanced Super-Resolution Generative Adversarial Network for Satellite Images,” IEEE J Sel Top Appl Earth Obs Remote Sens, vol. 16, pp. 9886–9906, 2023, doi: 10.1109/JSTARS.2023.3322642.
+[4]Y. Xiao, Q. Yuan, K. Jiang, J. He, X. Jin, and L. Zhang, “EDiffSR: An Efficient Diffusion Probabilistic Model for Remote Sensing Image Super-Resolution,” IEEE Transactions on Geoscience and Remote Sensing, vol. 62, pp. 1–14, 2024, doi: 10.1109/TGRS.2023.3341437.
+[5]M. Ziaja, P. Kowaleczko, T. Tarasiewicz, D. Kostrzewa, and M. Kawulok, “Hyperspectral Pansharpening Enhanced with Multi-Image Super-Resolution for PRISMA Data,” IEEE J Sel Top Appl Earth Obs Remote Sens, vol. 18, pp. 16562–16578, 2025, doi: 10.1109/JSTARS.2025.3581741.
+[6]S. A. Magid et al., “Dynamic High-Pass Filtering and Multi-Spectral Attention for Image Super-Resolution,” 2021.
+[7]H. Chen, J. Gu, and Z. Zhang, “Attention in Attention Network for Image Super-Resolution,” Nov. 2021, [Online]. Available: http://arxiv.org/abs/2104.09497
+[8]Y. Liang, R. Timofte, J. Wang, S. Zhou, Y. Gong, and N. Zheng, “Single-Image super-resolution - When model adaptation matters,” Pattern Recognit, vol. 116, Aug. 2021, doi: 10.1016/j.patcog.2021.107931.
+[9]R. Lan, L. Sun, Z. Liu, H. Lu, C. Pang, and X. Luo, “MADNet: A Fast and Lightweight Network for Single-Image Super Resolution,” IEEE Trans Cybern, vol. 51, no. 3, pp. 1443–1453, Mar. 2021, doi: 10.1109/TCYB.2020.2970104.
+[10]S. Muhammad, A. Bashir, Y. Wang, and M. Khan, “Deep learning for image super-resolution A Comprehensive Review of Deep Learning-based Single Image Super-resolution Deep learning for image super-resolution,” Sep. 2022.
+[11]Q. Chen et al., “MixFormer: Mixing Features across Windows and Dimensions,” Apr. 2022, [Online]. Available: http://arxiv.org/abs/2204.02557
+[12]X. Liu, S. Chen, L. Song, M. Woźniak, and S. Liu, “Self-attention negative feedback network for real-time image super-resolution,” Journal of King Saud University - Computer and Information Sciences, vol. 34, no. 8, pp. 6179–6186, Sep. 2022, doi: 10.1016/j.jksuci.2021.07.014.
+[13]X. Liu, J. Li, T. Duan, J. Li, and Y. Wang, “DSMA: Reference-Based Image Super-Resolution Method Based on Dual-View Supervised Learning and Multi-Attention Mechanism,” IEEE Access, vol. 10, pp. 54649–54659, 2022, doi: 10.1109/ACCESS.2022.3174194.
+[14]C. Deng, X. Luo, and W. Wang, “Multiple Frame Splicing and Degradation Learning for Hyperspectral Imagery Super-Resolution,” IEEE J Sel Top Appl Earth Obs Remote Sens, vol. 15, pp. 8389–8401, 2022, doi: 10.1109/JSTARS.2022.3207777.
+[15]Z. Chen, Y. Zhang, J. Gu, Y. Zhang, L. Kong, and X. Yuan, “Cross Aggregation Transformer for Image Restoration,” Mar. 2023, [Online]. Available: http://arxiv.org/abs/2211.13654
+[16]Z. Chen, Y. Zhang, J. Gu, L. Kong, X. Yang, and F. Yu, “Dual Aggregation Transformer for Image Super-Resolution,” Aug. 2023, [Online]. Available: http://arxiv.org/abs/2308.03364
+[17]C. Saharia, J. Ho, W. Chan, T. Salimans, D. J. Fleet, and M. Norouzi, “Image Super-Resolution via Iterative Refinement,” IEEE Trans Pattern Anal Mach Intell, vol. 45, no. 4, pp. 4713–4726, Apr. 2023, doi: 10.1109/TPAMI.2022.3204461.
+  

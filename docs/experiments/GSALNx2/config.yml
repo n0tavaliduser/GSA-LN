@@ -1,0 +1,273 @@
+{
+  "val": {
+    "value": {
+      "metrics": {
+        "psnr": {
+          "type": "calculate_psnr",
+          "crop_border": 2,
+          "test_y_channel": true
+        },
+        "ssim": {
+          "type": "calculate_ssim",
+          "crop_border": 2,
+          "test_y_channel": true
+        }
+      },
+      "save_img": false,
+      "val_freq": 5000
+    }
+  },
+  "dist": {
+    "value": false
+  },
+  "name": {
+    "value": "GSALN_x2"
+  },
+  "path": {
+    "value": {
+      "log": "/workspace/gsa-ln/experiments/GSALN_x2",
+      "models": "/workspace/gsa-ln/experiments/GSALN_x2/models",
+      "resume_state": "experiments/GSALN_x2/training_states/40000.state",
+      "strict_load_g": true,
+      "visualization": "/workspace/gsa-ln/experiments/GSALN_x2/visualization",
+      "training_states": "/workspace/gsa-ln/experiments/GSALN_x2/training_states",
+      "experiments_root": "/workspace/gsa-ln/experiments/GSALN_x2",
+      "pretrain_network_g": "/workspace/gsa-ln/experiments/GSALN_x2/models/net_g_40000.pth"
+    }
+  },
+  "rank": {
+    "value": 0
+  },
+  "scale": {
+    "value": 2
+  },
+  "train": {
+    "value": {
+      "optim_g": {
+        "lr": 0.0002,
+        "type": "Adam"
+      },
+      "pixel_opt": {
+        "type": "L1Loss",
+        "reduction": "mean",
+        "loss_weight": 1
+      },
+      "scheduler": {
+        "type": "CosineAnnealingRestartLR",
+        "eta_min": 1e-7,
+        "periods": [
+          200000,
+          200000,
+          200000
+        ],
+        "restart_weights": [
+          1,
+          0.75,
+          0.5
+        ]
+      },
+      "total_iter": 600000,
+      "warmup_iter": 5000
+    }
+  },
+  "_wandb": {
+    "value": {
+      "e": {
+        "32bkpg6k0gkajd8pqvcl2696fgtr03bn": {
+          "os": "Linux-6.5.0-21-generic-x86_64-with-glibc2.39",
+          "git": {
+            "commit": "ce4d05263ea973c4ce42aea2ca94a3b3cb93f115",
+            "remote": "git@github.com:n0tavaliduser/GSA-LN.git"
+          },
+          "gpu": "NVIDIA GeForce RTX 5090",
+          "args": [
+            "-opt",
+            "options/train/train_gsaln_x2.yml"
+          ],
+          "disk": {
+            "/": {
+              "used": "2004496568320",
+              "total": "7890177884160"
+            }
+          },
+          "host": "275793b3bb3e",
+          "root": "/workspace/gsa-ln",
+          "email": "stevanoputra40@gmail.com",
+          "memory": {
+            "total": "270098608128"
+          },
+          "python": "CPython 3.10.15",
+          "program": "/workspace/gsa-ln/basicsr/train.py",
+          "codePath": "basicsr/train.py",
+          "writerId": "32bkpg6k0gkajd8pqvcl2696fgtr03bn",
+          "cpu_count": 16,
+          "gpu_count": 1,
+          "startedAt": "2026-01-22T21:18:18.131246Z",
+          "executable": "/venv/gsa-ln/bin/python",
+          "gpu_nvidia": [
+            {
+              "name": "NVIDIA GeForce RTX 5090",
+              "uuid": "GPU-fd32dcd1-619f-afbf-d6ba-bd219eea4211",
+              "cudaCores": 21760,
+              "memoryTotal": "34190917632",
+              "architecture": "Blackwell"
+            }
+          ],
+          "cudaVersion": "13.0",
+          "codePathLocal": "basicsr/train.py",
+          "cpu_count_logical": 32
+        },
+        "3xp2hsycjt4red79roc781da1rta0ez4": {
+          "os": "Linux-6.5.0-21-generic-x86_64-with-glibc2.39",
+          "git": {
+            "commit": "ce4d05263ea973c4ce42aea2ca94a3b3cb93f115",
+            "remote": "git@github.com:n0tavaliduser/GSA-LN.git"
+          },
+          "gpu": "NVIDIA GeForce RTX 5090",
+          "args": [
+            "-opt",
+            "options/train/train_gsaln_x2.yml"
+          ],
+          "disk": {
+            "/": {
+              "used": "1947765452800",
+              "total": "7890177884160"
+            }
+          },
+          "host": "275793b3bb3e",
+          "root": "/workspace/gsa-ln",
+          "email": "stevanoputra40@gmail.com",
+          "memory": {
+            "total": "270098604032"
+          },
+          "python": "CPython 3.10.15",
+          "program": "/workspace/gsa-ln/basicsr/train.py",
+          "codePath": "basicsr/train.py",
+          "writerId": "3xp2hsycjt4red79roc781da1rta0ez4",
+          "cpu_count": 16,
+          "gpu_count": 1,
+          "startedAt": "2026-01-23T08:30:28.987966Z",
+          "executable": "/venv/gsa-ln/bin/python",
+          "gpu_nvidia": [
+            {
+              "name": "NVIDIA GeForce RTX 5090",
+              "uuid": "GPU-fd32dcd1-619f-afbf-d6ba-bd219eea4211",
+              "cudaCores": 21760,
+              "memoryTotal": "34190917632",
+              "architecture": "Blackwell"
+            }
+          ],
+          "cudaVersion": "13.0",
+          "codePathLocal": "basicsr/train.py",
+          "cpu_count_logical": 32
+        }
+      },
+      "m": [],
+      "t": {
+        "1": [
+          1,
+          41
+        ],
+        "2": [
+          1,
+          41
+        ],
+        "3": [
+          5,
+          13,
+          14,
+          16,
+          35,
+          62
+        ],
+        "4": "3.10.15",
+        "5": "0.24.0",
+        "12": "0.24.0",
+        "13": "linux-x86_64"
+      },
+      "cli_version": "0.24.0",
+      "python_version": "3.10.15"
+    }
+  },
+  "logger": {
+    "value": {
+      "wandb": {
+        "project": "GSALN_PRODUCTION_x2",
+        "resume_id": "q01j31im"
+      },
+      "print_freq": 200,
+      "use_tb_logger": true,
+      "save_checkpoint_freq": 5000
+    }
+  },
+  "num_gpu": {
+    "value": 1
+  },
+  "datasets": {
+    "value": {
+      "val": {
+        "name": "Set5",
+        "task": "SR",
+        "type": "PairedImageDataset",
+        "phase": "val",
+        "scale": 2,
+        "io_backend": {
+          "type": "disk"
+        },
+        "dataroot_gt": "datasets/benchmark/Set5/HR",
+        "dataroot_lq": "datasets/benchmark/Set5/LR_bicubic/X2",
+        "filename_tmpl": "{}x2"
+      },
+      "train": {
+        "name": "DF2K",
+        "type": "PairedImageDataset",
+        "phase": "train",
+        "scale": 2,
+        "gt_size": 192,
+        "use_rot": true,
+        "use_hflip": true,
+        "io_backend": {
+          "type": "disk"
+        },
+        "pin_memory": true,
+        "dataroot_gt": "./datasets/DF2K/HR",
+        "dataroot_lq": "./datasets/DF2K/LR_bicubic/X2",
+        "use_shuffle": true,
+        "filename_tmpl": "{}x2",
+        "prefetch_mode": "cuda",
+        "batch_size_per_gpu": 32,
+        "num_worker_per_gpu": 12,
+        "dataset_enlarge_ratio": 1
+      }
+    }
+  },
+  "is_train": {
+    "value": true
+  },
+  "network_g": {
+    "value": {
+      "type": "GSALN",
+      "freq_mb": true,
+      "upscale": 2,
+      "num_feat": 64,
+      "num_in_ch": 3,
+      "num_blocks": 32,
+      "num_out_ch": 3
+    }
+  },
+  "root_path": {
+    "value": "/workspace/gsa-ln"
+  },
+  "model_type": {
+    "value": "SRModel"
+  },
+  "world_size": {
+    "value": 1
+  },
+  "auto_resume": {
+    "value": false
+  },
+  "manual_seed": {
+    "value": 10
+  }
+}

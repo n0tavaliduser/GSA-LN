@@ -46,9 +46,9 @@ network_g:
   freq_mb: True
 
 path:
-  pretrain_network_g: experiments/GSALN_x2/models/net_g_40000.pth
+  pretrain_network_g: ~
   strict_load_g: True
-  resume_state: experiments/GSALN_x2/training_states/40000.state
+  resume_state: ~
 
 train:
   optim_g:
